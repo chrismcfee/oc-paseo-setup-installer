@@ -1,0 +1,108 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "@gotgenes/opencode-agent-identity",
+    "opencode-agent-memory",
+    "oh-my-openagent",
+    "opencode-agent-skills",
+    "envsitter-guard",
+    "@howaboua/opencode-planning-toolkit",
+    "opentmux"
+  ],
+  "model": "zai-coding-plan/glm-5.2",
+  "disabled_providers": [
+    "nanogpt"
+  ],
+  "provider": {
+    "zai-coding-plan": {
+      "models": {
+        "glm-5.2": {
+          "name": "GLM-5.2 (1M)",
+          "limit": { "context": 1000000, "output": 131072 },
+          "options": {
+            "reasoningEffort": "max"
+          },
+          "variants": {
+            "high": { "disabled": true }
+          }
+        }
+      }
+    },
+    "tensorzero": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "TensorZero",
+      "options": {
+        "baseURL": "http://192.168.1.157:3000/openai/v1/"
+      },
+      "models": {
+        "FrontierCODE": {
+          "name": "FrontierCODE (TensorZero)",
+          "tool_call": true,
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          }
+        }
+      }
+    }
+  },
+  // NOTE: the `agent` block was removed — oh-my-openagent's override-protection filter
+  // strips user `agent.*` overrides for its builtin agent names, so model/variant/description
+  // set here never took effect (verified: oracle resolved to glm-5.1, not the glm-5.2 set
+  // here). Per-agent model + variant:"max" now live in
+  // ~/.config/opencode/oh-my-openagent.jsonc, which IS honored by the plugin.
+  // Under `opencode --pure` (plugins disabled) these agents fall back to opencode built-ins.
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": true,
+      "headers": {
+        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
+      }
+    },
+    "exa": {
+      "type": "remote",
+      "url": "https://mcp.exa.ai/mcp?exaApiKey={env:EXA_API_KEY}",
+      "enabled": true
+    },
+    "zread": {
+      "type": "remote",
+      "url": "https://api.z.ai/api/mcp/zread/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:Z_AI_ZREAD_TOKEN}"
+      }
+    },
+    "web-search-prime": {
+      "type": "remote",
+      "url": "https://api.z.ai/api/mcp/web_search_prime/mcp",
+      "headers": {
+        "Authorization": "{env:Z_AI_WSP_TOKEN}"
+      }
+    },
+    "web-reader": {
+      "type": "remote",
+      "url": "https://api.z.ai/api/mcp/web_reader/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:Z_AI_WR_TOKEN}"
+      }
+    },
+    "zai-mcp-server": {
+      "type": "local",
+      "command": ["npx", "-y", "@z_ai/mcp-server"],
+      "environment": {
+        "Z_AI_API_KEY": "{env:Z_AI_API_KEY}",
+        "Z_AI_MODE": "ZAI"
+      }
+    },
+    "paseo": {
+      "type": "remote",
+      "url": "http://127.0.0.1:6767/mcp/agents",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:PASEO_TOKEN}"
+      }
+    }
+  }
+}
