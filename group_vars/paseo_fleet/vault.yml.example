@@ -1,0 +1,29 @@
+---
+# Copy to vault.yml in this directory, fill in the real values, then encrypt:
+#   ansible-vault encrypt group_vars/paseo_fleet/vault.yml
+#
+# The keys under paseo_opencode_secrets MUST match the {env:VAR} placeholders in ../../opencode.jsonc.
+# You can generate this whole block from your OpenCode .env instead of typing it:
+#   ./opencode-secrets-from-env.sh ~/.config/opencode/.env
+# (prints `paseo_opencode_secrets:` with the values — pipe to vault.yml and encrypt).
+
+# The Paseo daemon password. If your opencode.jsonc calls Paseo back over MCP with
+# Authorization: Bearer {env:PASEO_TOKEN}, set PASEO_TOKEN below to this same value.
+vault_paseo_daemon_password: "change-me"
+
+paseo_opencode_secrets:
+  CONTEXT7_API_KEY: ""
+  EXA_API_KEY: ""
+  Z_AI_ZREAD_TOKEN: ""
+  Z_AI_WSP_TOKEN: ""
+  Z_AI_WR_TOKEN: ""
+  Z_AI_API_KEY: ""
+  PASEO_TOKEN: ""          # the bearer the local OpenCode uses to call Paseo (== daemon password)
+
+# Optional: only if your primary provider (zai-coding-plan) authenticates via `opencode auth login`
+# rather than an {env:VAR} apiKey in opencode.jsonc. Paste that auth.json as a dict; it's deployed
+# 0600 to the daemon user's ~/.local/share/opencode/auth.json.
+# paseo_opencode_auth:
+#   zai-coding-plan:
+#     type: "api"
+#     key: "..."

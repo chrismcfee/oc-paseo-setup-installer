@@ -1,8 +1,96 @@
 ---
-# Everything OpenCode-side. Two independent blocks:
+# Everything OpenCode-side. Independent blocks:
+#   0) deploy a sanitized opencode.json[c] (+ extra files, + optional auth.json) for the daemon user
 #   A) discover the config path -> optionally fetch it back -> optionally inject the MCP block
 #   B) print OpenCode's effective (merged) config to the play output
 # Runs as paseo_user with that user's HOME so XDG / OPENCODE_CONFIG / project-local resolve right.
+
+# ===========================================================================
+# 0) deploy the sanitized OpenCode config (dedicated-user mode)
+# Secrets in the config are {env:VAR} placeholders; the matching VALUES are injected into the daemon
+# ENVIRONMENT from paseo_opencode_secrets (see service.yml + paseo.env.j2), so nothing secret is
+# templated here. auth.json (provider creds) is optional and only written when provided via Vault.
+# ===========================================================================
+- name: Deploy the OpenCode config
+  when: paseo_deploy_opencode_config | bool
+  block:
+    - name: Resolve the sanitized config source on the controller
+      ansible.builtin.set_fact:
+        _paseo_oc_src: >-
+          {{ paseo_opencode_config_src
+             if (paseo_opencode_config_src is match('^/'))
+             else (role_path ~ '/files/' ~ paseo_opencode_config_src) }}
+
+    - name: Pre-flight — sanitized OpenCode config exists on the controller
+      ansible.builtin.stat:
+        path: "{{ _paseo_oc_src }}"
+      delegate_to: localhost
+      become: false
+      register: _paseo_oc_src_stat
+
+    - name: Require the sanitized OpenCode config
+      ansible.builtin.assert:
+        that: _paseo_oc_src_stat.stat.exists
+        fail_msg: >-
+          No sanitized OpenCode config at {{ _paseo_oc_src }}. Point paseo_opencode_config_src at your
+          sanitized opencode.json[c] (secrets replaced by {env:VAR}); see the README. Or set
+          paseo_deploy_opencode_config: false.
+        quiet: true
+
+    - name: Ensure the OpenCode config directory exists
+      ansible.builtin.file:
+        path: "{{ paseo_opencode_config_dest | dirname }}"
+        state: directory
+        owner: "{{ paseo_user }}"
+        group: "{{ paseo_group }}"
+        mode: "0750"
+
+    - name: Deploy the sanitized OpenCode config
+      ansible.builtin.copy:
+        src: "{{ _paseo_oc_src }}"
+        dest: "{{ paseo_opencode_config_dest }}"
+        owner: "{{ paseo_user }}"
+        group: "{{ paseo_group }}"
+        mode: "0640"
+      notify: restart paseo
+
+    - name: Deploy extra OpenCode files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: "{{ paseo_user }}"
+        group: "{{ paseo_group }}"
+        mode: "{{ item.mode | default('0640') }}"
+      loop: "{{ paseo_opencode_extra_files }}"
+      loop_control:
+        label: "{{ item.dest }}"
+      notify: restart paseo
+
+    - name: Ensure the OpenCode data directory exists (for auth.json)
+      ansible.builtin.file:
+        path: "{{ paseo_opencode_auth_dest | dirname }}"
+        state: directory
+        owner: "{{ paseo_user }}"
+        group: "{{ paseo_group }}"
+        mode: "0700"
+      when: paseo_opencode_auth | length > 0
+
+    - name: Deploy the OpenCode auth.json (provider credentials)
+      ansible.builtin.copy:
+        content: "{{ paseo_opencode_auth | to_nice_json }}\n"
+        dest: "{{ paseo_opencode_auth_dest }}"
+        owner: "{{ paseo_user }}"
+        group: "{{ paseo_group }}"
+        mode: "0600"
+      no_log: true
+      when: paseo_opencode_auth | length > 0
+      notify: restart paseo
+
+    # So the optional MCP-merge below targets the file we just deployed instead of re-discovering.
+    - name: Default the OpenCode config path to the deployed file
+      ansible.builtin.set_fact:
+        paseo_opencode_config_path: "{{ paseo_opencode_config_dest }}"
+      when: paseo_opencode_config_path | length == 0
 
 # ===========================================================================
 # A) discover + fetch + wire   (only when we need a concrete config path)

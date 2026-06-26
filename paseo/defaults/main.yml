@@ -21,14 +21,17 @@ paseo_state_dir: "{{ paseo_home_dir }}/.paseo"
 # assertion below still runs so you fail fast on too-old Node.
 paseo_manage_node: true
 paseo_install_github_cli: true
-paseo_min_node_major: 20
+paseo_min_node_major: 22         # paseo's CLI prompts use util.styleText's array form (Node >= 22)
 
 paseo_npm_prefix: "{{ paseo_home_dir }}/.npm-global"
 paseo_bin_dir: "{{ paseo_npm_prefix }}/bin"
 paseo_bin: "{{ paseo_bin_dir }}/paseo"
 
 paseo_cli_package: "@getpaseo/cli"
-paseo_cli_version: ""            # pin a version e.g. "1.4.2"; empty = track latest
+paseo_cli_version: ""            # pin a version e.g. "0.1.101"; empty = track latest
+# npm installs globals under <prefix>/lib/node_modules; the password step runs paseo's own
+# hashDaemonPassword() from here via `node`, so it never depends on the broken set-password prompt.
+paseo_cli_pkg_dir: "{{ paseo_npm_prefix }}/lib/node_modules/{{ paseo_cli_package }}"
 
 paseo_symlink_cli: true          # symlink paseo into /usr/local/bin for admin convenience
 # If the daemon runs as a dedicated user, the agent CLI it spawns (opencode) must be
@@ -36,9 +39,9 @@ paseo_symlink_cli: true          # symlink paseo into /usr/local/bin for admin c
 # into /usr/local/bin is the belt-and-suspenders fix. Point this at your opencode binary.
 paseo_opencode_bin: ""           # e.g. /usr/bin/opencode — empty = skip the symlink
 
-# PATH the daemon runs with. The npm prefix bin comes first so a per-user opencode is
-# found when Paseo launches it (runbook §9 "can't find binary"). REVIEW FIX.
-paseo_service_path: "{{ paseo_bin_dir }}:/usr/local/bin:/usr/bin:/bin"
+# PATH the daemon runs with. The OpenCode install dir + npm prefix bin come first so the agent
+# CLI Paseo launches (opencode) is found (runbook §9 "can't find binary"). REVIEW FIX.
+paseo_service_path: "{{ paseo_opencode_install_dir }}/bin:{{ paseo_bin_dir }}:/usr/local/bin:/usr/bin:/bin"
 
 # =============================================================================
 # Network / bind (NetBird mesh) — OVERRIDE PER HOST
@@ -50,6 +53,11 @@ paseo_hostnames:                          # extra Host-header names (the listen 
   - localhost
   - 127.0.0.1
 paseo_worktrees_root: "{{ paseo_state_dir }}/worktrees"
+
+# Paseo's hosted relay (app.paseo.sh) lets the Paseo app reach the daemon WITHOUT the mesh. For a
+# NetBird-only fleet you usually don't want each box dialing the public relay — default off. Set true
+# to use Paseo's relay/pairing instead of (or alongside) the mesh.
+paseo_relay_enabled: false
 
 # =============================================================================
 # Service / init system
@@ -82,12 +90,56 @@ paseo_systemd_protect_home: true
 paseo_set_password: true
 paseo_daemon_password: ""        # REQUIRED when paseo_set_password — pull from Vault
 
-# How the password is fed to `set-password`. The runbook shows an interactive prompt; the exact
-# non-interactive form depends on your build. Default pipes it on stdin (one newline appended).
-# Override argv if your build uses a flag (e.g. ["{{ paseo_bin }}","daemon","set-password","--stdin"]).
-# For builds that prompt twice, put the password on two lines in paseo_set_password_stdin.
-paseo_set_password_argv: ["{{ paseo_bin }}", "daemon", "set-password"]
-paseo_set_password_stdin: "{{ paseo_daemon_password }}"
+# NOTE: `paseo daemon set-password` is a pure interactive TTY prompt (no --stdin/--password flag) and
+# crashes on Node < 22, so the role does NOT call it. It hashes the password with paseo's OWN
+# hashDaemonPassword() (bcryptjs cost 12 — byte-for-byte what set-password stores) on the target and
+# writes the hash to config.json at daemon.auth.password. Nothing to configure here. See tasks/password.yml.
+
+# =============================================================================
+# OpenCode: download + install, and deploy a (sanitized) config — dedicated-user mode
+# =============================================================================
+# Install the OpenCode CLI for paseo_user via the official installer, and deploy a sanitized
+# opencode.json whose secrets are externalized as {env:VAR}. Set both false to keep OpenCode
+# entirely out of scope (original behavior: only discover / fetch / print / MCP-wire below).
+paseo_install_opencode: true
+paseo_deploy_opencode_config: true
+
+# --- install (official installer: curl | bash) -------------------------------------------------
+# Always downloads a prebuilt binary from GitHub releases into ~/.opencode/bin and honors VERSION=.
+# Needs curl + tar on the target and outbound access to github.com.
+paseo_opencode_install_url: "https://opencode.ai/install"
+paseo_opencode_version: ""          # pin e.g. "1.17.9"; empty = latest at first install
+paseo_opencode_upgrade: false       # re-run the installer every play even if present (honors version)
+paseo_opencode_install_dir: "{{ paseo_home_dir }}/.opencode"      # installer hardcodes ~/.opencode
+paseo_opencode_installed_bin: "{{ paseo_opencode_install_dir }}/bin/opencode"
+paseo_opencode_symlink: true        # symlink the binary into /usr/local/bin/opencode too
+
+# --- config deployment -------------------------------------------------------------------------
+# The sanitized config lives on the CONTROLLER. Generate it (and the vault secrets) from your real
+# config with files/sanitize-opencode-config.py — never commit the real one. A bare filename is
+# looked up in the role's files/ dir; an absolute path is used as-is.
+paseo_opencode_config_src: "opencode.json"
+paseo_opencode_config_dest: "{{ paseo_home_dir }}/.config/opencode/{{ paseo_opencode_config_src | basename }}"
+# Extra OpenCode files to ship next to it (AGENTS.md, instructions, …): list of {src, dest[, mode]}.
+paseo_opencode_extra_files: []
+
+# --- secrets (externalized) --------------------------------------------------------------------
+# Real values for the {env:VAR} placeholders in the sanitized config. Injected into the DAEMON
+# ENVIRONMENT (systemd EnvironmentFile + OpenRC source), so {env:VAR} resolves when Paseo launches
+# OpenCode. PULL FROM VAULT — never put real values here. (You can include PASEO_PASSWORD here too,
+# e.g. for the mcp.paseo loopback block.) Values must be single-line and free of single quotes.
+#   paseo_opencode_secrets:
+#     OPENCODE_PROVIDER_TENSORZERO_OPTIONS_APIKEY: "{{ vault_tensorzero_api_key }}"
+paseo_opencode_secrets: {}
+paseo_env_file: /etc/paseo/paseo.env        # root:paseo 0640; loaded by both init systems
+
+# --- provider credentials (optional auth.json) -------------------------------------------------
+# Some providers (your primary model's provider, or built-ins added via `opencode auth login`) keep
+# credentials in ~/.local/share/opencode/auth.json rather than in opencode.json. If yours does,
+# provide that JSON as a dict FROM VAULT and the role writes it for the daemon user (0600).
+# Empty = skip (use this only if an {env:VAR} apiKey in the config isn't enough).
+paseo_opencode_auth: {}
+paseo_opencode_auth_dest: "{{ paseo_home_dir }}/.local/share/opencode/auth.json"
 
 # =============================================================================
 # OpenCode MCP client wiring — Direction B (runbook §5), optional

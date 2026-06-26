@@ -20,6 +20,10 @@
 - name: Install user, Node and the Paseo CLI
   ansible.builtin.import_tasks: install.yml
 
+- name: Download and install the OpenCode CLI
+  ansible.builtin.import_tasks: opencode_install.yml
+  when: paseo_install_opencode | bool
+
 - name: Manage the daemon password
   ansible.builtin.import_tasks: password.yml
   when: paseo_set_password | bool
@@ -27,10 +31,12 @@
 - name: Template the daemon config
   ansible.builtin.import_tasks: config.yml
 
-- name: Discover / fetch / print / wire the OpenCode config
+- name: Deploy / discover / fetch / print / wire the OpenCode config
   ansible.builtin.import_tasks: opencode.yml
   when: >-
-    (paseo_manage_opencode_mcp | bool)
+    (paseo_deploy_opencode_config | bool)
+    or (paseo_opencode_auth | length > 0)
+    or (paseo_manage_opencode_mcp | bool)
     or (paseo_fetch_opencode_config | bool)
     or (paseo_print_opencode_config | bool)
 

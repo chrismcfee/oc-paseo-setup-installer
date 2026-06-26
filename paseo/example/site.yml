@@ -8,5 +8,10 @@
     # One shared secret pushed via Vault (NetBird is the real access boundary), or move this into
     # host_vars for a distinct password per box. See group_vars/paseo_fleet/vault.yml.example.
     paseo_daemon_password: "{{ vault_paseo_daemon_password }}"
+    # This library-style example provisions only the Paseo daemon. The full OpenCode install +
+    # config deployment is shown by the repo-root site.yml; keep it off here so this example needs
+    # no opencode.jsonc on the controller.
+    paseo_install_opencode: false
+    paseo_deploy_opencode_config: false
   roles:
     - paseo

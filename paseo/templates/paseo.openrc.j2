@@ -5,6 +5,7 @@ description="Paseo daemon"
 
 : ${PASEO_USER:={{ paseo_user }}}
 : ${PASEO_HOME:={{ paseo_state_dir }}}
+: ${PASEO_ENV_FILE:={{ paseo_env_file }}}
 PASEO_BIN="{{ paseo_bin }}"
 # PATH so the daemon finds the agent CLI (opencode) it spawns.
 PASEO_PATH="{{ paseo_service_path }}"
@@ -24,7 +25,9 @@ depend() {
 
 start() {
     ebegin "Starting paseo"
-    su -s /bin/sh "$PASEO_USER" -c "PATH='$PASEO_PATH' PASEO_HOME='$PASEO_HOME' '$PASEO_BIN' daemon start"
+    # Source the daemon env file (OpenCode provider secrets) inside the su so the spawned opencode
+    # inherits it; `set -a` exports every assignment. Optional: skipped cleanly if the file is absent.
+    su -s /bin/sh "$PASEO_USER" -c "set -a; [ -r '$PASEO_ENV_FILE' ] && . '$PASEO_ENV_FILE'; set +a; PATH='$PASEO_PATH' PASEO_HOME='$PASEO_HOME' '$PASEO_BIN' daemon start"
     eend $?
 }
 

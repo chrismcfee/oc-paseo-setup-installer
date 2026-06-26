@@ -10,6 +10,10 @@ Wants=network-online.target{% if paseo_after_netbird %} {{ paseo_netbird_unit }}
 Type=simple
 User={{ paseo_user }}
 Group={{ paseo_group }}
+# OpenCode provider secrets (and anything else the daemon's subprocesses need) live here. Leading
+# '-' => optional, so the unit still starts if the file is absent. The explicit Environment= lines
+# below win over anything in the file, so a stray PATH/PASEO_HOME there can't break the daemon.
+EnvironmentFile=-{{ paseo_env_file }}
 Environment=PASEO_HOME={{ paseo_state_dir }}
 # PATH so the daemon can find the agent CLI (opencode/claude/codex) it launches as a subprocess.
 Environment=PATH={{ paseo_service_path }}

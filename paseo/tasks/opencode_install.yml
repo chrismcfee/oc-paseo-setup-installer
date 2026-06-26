@@ -1,0 +1,98 @@
+---
+# Download + install the OpenCode CLI for paseo_user via the official installer. The installer
+# always fetches a prebuilt binary from GitHub releases into ~/.opencode/bin (honoring VERSION=),
+# so this needs curl + tar on the target and outbound access to github.com. Idempotent: it only
+# (re)runs when OpenCode is missing, a pinned version differs, or paseo_opencode_upgrade is set.
+
+- name: Ensure curl + tar are present (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - curl
+      - tar
+      - ca-certificates
+    state: present
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+
+- name: Ensure curl is present (Gentoo)
+  community.general.portage:
+    package: net-misc/curl
+    state: present
+  when: ansible_os_family == 'Gentoo'
+
+- name: Ensure curl + tar are present (Fedora/RHEL)
+  ansible.builtin.package:
+    name:
+      - curl
+      - tar
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Ensure curl + tar are present (Arch)
+  community.general.pacman:
+    name:
+      - curl
+      - tar
+    state: present
+  when: ansible_os_family == 'Archlinux'
+
+- name: Check the installed OpenCode version
+  ansible.builtin.command: "{{ paseo_opencode_installed_bin }} --version"
+  environment:
+    HOME: "{{ paseo_home_dir }}"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_oc_ver
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether OpenCode must be (re)installed
+  ansible.builtin.set_fact:
+    _paseo_oc_install_needed: >-
+      {{ (_paseo_oc_ver.rc != 0)
+         or (paseo_opencode_upgrade | bool)
+         or ((paseo_opencode_version | length > 0)
+             and ((_paseo_oc_ver.stdout | trim) != paseo_opencode_version)) }}
+
+# `set -o pipefail` so a curl failure (e.g. a bad pinned VERSION -> 404) fails the task instead of
+# being masked by bash's exit. VERSION="" means "latest" (the installer reads ${VERSION:-}).
+- name: Install / upgrade the OpenCode CLI (official installer)
+  ansible.builtin.shell:
+    cmd: "set -o pipefail; curl -fsSL {{ paseo_opencode_install_url }} | bash"
+  args:
+    executable: /bin/bash
+  environment:
+    HOME: "{{ paseo_home_dir }}"
+    VERSION: "{{ paseo_opencode_version }}"
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_oc_install
+  changed_when: _paseo_oc_install.rc == 0
+  when: _paseo_oc_install_needed | bool
+  notify: restart paseo
+
+- name: Verify the OpenCode binary is present
+  ansible.builtin.stat:
+    path: "{{ paseo_opencode_installed_bin }}"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_oc_bin_stat
+
+- name: Assert OpenCode installed
+  ansible.builtin.assert:
+    that: _paseo_oc_bin_stat.stat.exists
+    fail_msg: >-
+      OpenCode binary not found at {{ paseo_opencode_installed_bin }} after install. Check the target
+      has curl + tar and can reach github.com, or pin a known-good paseo_opencode_version.
+    quiet: true
+
+# Belt-and-suspenders alongside paseo_service_path: a /usr/local/bin symlink means the daemon (and
+# you, interactively) find opencode regardless of PATH nuances.
+- name: Symlink the OpenCode binary into /usr/local/bin
+  ansible.builtin.file:
+    src: "{{ paseo_opencode_installed_bin }}"
+    dest: /usr/local/bin/opencode
+    state: link
+    force: true
+  when: paseo_opencode_symlink | bool

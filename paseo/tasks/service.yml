@@ -1,4 +1,28 @@
 ---
+# Daemon environment file (OpenCode provider secrets, etc.), loaded by BOTH init systems: systemd
+# via EnvironmentFile=, OpenRC by sourcing it in the service script. Written before the units that
+# reference it. root:paseo 0640 — the daemon reads it, the world cannot. Units tolerate its absence,
+# so it's only created when there are secrets to write.
+- name: Ensure the env-file directory exists
+  ansible.builtin.file:
+    path: "{{ paseo_env_file | dirname }}"
+    state: directory
+    owner: root
+    group: "{{ paseo_group }}"
+    mode: "0750"
+  when: paseo_opencode_secrets | length > 0
+
+- name: Write the daemon environment file
+  ansible.builtin.template:
+    src: paseo.env.j2
+    dest: "{{ paseo_env_file }}"
+    owner: root
+    group: "{{ paseo_group }}"
+    mode: "0640"
+  no_log: true
+  when: paseo_opencode_secrets | length > 0
+  notify: restart paseo
+
 - name: Install systemd unit
   ansible.builtin.template:
     src: paseo.service.j2

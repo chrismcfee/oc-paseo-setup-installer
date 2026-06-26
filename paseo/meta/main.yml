@@ -16,6 +16,13 @@ galaxy_info:
     - name: Ubuntu
       versions:
         - all
+    - name: Fedora
+      versions:
+        - all
+    - name: EL
+      versions:
+        - all
+    - name: Archlinux
   galaxy_tags:
     - paseo
     - opencode
@@ -24,6 +31,8 @@ galaxy_info:
     - systemd
     - mesh
     - gentoo
+    - fedora
+    - archlinux
     - homelab
 
 dependencies: []

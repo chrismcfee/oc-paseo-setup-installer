@@ -1,0 +1,24 @@
+---
+# One Paseo daemon per box, each binding its OWN NetBird mesh IP (never 0.0.0.0). Replace the
+# names + 100.x addresses with your real mesh IPs. The listen IP is auto-added to Paseo's
+# Host-header allowlist for you.
+#
+# NOTE on the loopback MCP: opencode.jsonc points the `paseo` MCP block at 127.0.0.1:6767. If a box
+# binds only its mesh IP (below), the OpenCode that Paseo launches there can't reach Paseo on
+# 127.0.0.1 — that one MCP server just won't connect (coding still works). To use it, either change
+# that URL to the host's mesh IP, or set paseo_listen to "0.0.0.0:6767" (password + firewall become
+# the boundary). See the README "Verify on your topology" section.
+all:
+  children:
+    paseo_fleet:
+      hosts:
+        box-a:
+          ansible_host: 100.64.0.1
+          paseo_listen: "100.64.0.1:6767"
+          paseo_hostnames: ["box-a"]
+
+        # box-b:
+        #   ansible_host: 100.64.0.2
+        #   paseo_listen: "100.64.0.2:6767"
+        #   paseo_hostnames: ["box-b"]
+        #   paseo_manage_node: false      # e.g. a Pi where you supply a newer Node yourself

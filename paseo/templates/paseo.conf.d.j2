@@ -3,3 +3,5 @@
 # Override these if you run more than one daemon on this host (distinct PASEO_HOME per daemon).
 PASEO_USER="{{ paseo_user }}"
 PASEO_HOME="{{ paseo_state_dir }}"
+# Daemon environment file (OpenCode provider secrets); sourced by the service at start.
+PASEO_ENV_FILE="{{ paseo_env_file }}"

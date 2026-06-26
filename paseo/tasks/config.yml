@@ -18,7 +18,8 @@
          | combine({
              'daemon': {
                'listen': paseo_listen,
-               'hostnames': paseo_effective_hostnames
+               'hostnames': paseo_effective_hostnames,
+               'relay': {'enabled': paseo_relay_enabled}
              },
              'worktrees': {'root': paseo_worktrees_root}
            }, recursive=True) }}

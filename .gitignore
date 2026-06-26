@@ -1,0 +1,37 @@
+# ===========================================================================
+# Secrets & local-only files — never commit.
+#
+# This repo intentionally commits only SANITIZED config: opencode.jsonc uses {env:VAR}
+# placeholders (verified — no inline keys), and only the *.example vault template is tracked.
+# Real secrets live in ~/.config/opencode/.env and in the encrypted, gitignored vault below.
+# ===========================================================================
+
+# --- Ansible Vault: password sources + plaintext staging ---
+.vault_pass
+.vault_pass.*
+*.unvaulted.yml
+*.unvaulted.yaml
+
+# Filled-in vault var files — only the *.example is tracked. To commit the ENCRYPTED vault,
+# force it deliberately:  git add -f group_vars/<group>/vault.yml
+group_vars/*/vault.yml
+group_vars/*/vault.yaml
+group_vars/*/opencode-secrets.yml
+host_vars/*/vault.yml
+host_vars/*/vault.yaml
+*.bak
+
+# --- Raw OpenCode secrets that must never be copied into the repo ---
+.env
+.env.*
+auth.json
+
+# --- Artifacts fetched back from hosts (configs / redacted hashes) ---
+/fetched-opencode/
+/fetched-daemon-config/
+
+# --- Tooling / machine-local ---
+.claude/settings.local.json
+*.retry
+*~
+.DS_Store

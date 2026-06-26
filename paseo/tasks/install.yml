@@ -80,6 +80,38 @@
     - paseo_install_github_cli | bool
     - ansible_os_family == 'Debian'
 
+- name: Install Node.js + npm (Fedora/RHEL)
+  ansible.builtin.package:
+    name: "{{ paseo_node_packages['RedHat'] }}"
+    state: present
+  when:
+    - paseo_manage_node | bool
+    - ansible_os_family == 'RedHat'
+
+- name: Install GitHub CLI (Fedora/RHEL)
+  ansible.builtin.package:
+    name: gh
+    state: present
+  when:
+    - paseo_install_github_cli | bool
+    - ansible_os_family == 'RedHat'
+
+- name: Install Node.js + npm (Arch)
+  community.general.pacman:
+    name: "{{ paseo_node_packages['Archlinux'] }}"
+    state: present
+  when:
+    - paseo_manage_node | bool
+    - ansible_os_family == 'Archlinux'
+
+- name: Install GitHub CLI (Arch)
+  community.general.pacman:
+    name: github-cli
+    state: present
+  when:
+    - paseo_install_github_cli | bool
+    - ansible_os_family == 'Archlinux'
+
 # ----------------------------------------------------------------------------
 # Version gate — fail fast on too-old Node (distro packages on the Pi, etc.)
 # ----------------------------------------------------------------------------

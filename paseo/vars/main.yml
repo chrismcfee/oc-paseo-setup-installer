@@ -5,3 +5,9 @@ paseo_node_packages:
   Debian:
     - nodejs
     - npm
+  RedHat:            # Fedora/RHEL: npm ships as a separate package (nodejs-npm)
+    - nodejs
+    - nodejs-npm
+  Archlinux:
+    - nodejs
+    - npm

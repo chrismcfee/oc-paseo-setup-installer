@@ -1,0 +1,21 @@
+---
+# Install + configure Paseo AND OpenCode across the fleet, over NetBird, on systemd OR OpenRC
+# (auto-detected per host). Quickstart:
+#
+#   ansible-galaxy collection install -r paseo/requirements.yml
+#   cp group_vars/paseo_fleet/vault.yml.example group_vars/paseo_fleet/vault.yml
+#   # fill in the secrets (or generate them: ./opencode-secrets-from-env.sh > /tmp/s.yml), then:
+#   ansible-vault encrypt group_vars/paseo_fleet/vault.yml
+#   ansible-playbook site.yml --ask-become-pass   # vault password auto-resolves via vault-pass.sh
+- name: Install and configure Paseo + OpenCode
+  hosts: paseo_fleet
+  become: true
+  vars:
+    # The Paseo daemon password, from Vault (group_vars/paseo_fleet/vault.yml).
+    paseo_daemon_password: "{{ vault_paseo_daemon_password }}"
+    # Deploy the sanitized OpenCode config kept at the repo root. Its secrets are {env:VAR}
+    # placeholders; the real values come from paseo_opencode_secrets (also in Vault) and are
+    # injected into the daemon's environment. Lands at the daemon user's ~/.config/opencode/.
+    paseo_opencode_config_src: "{{ playbook_dir }}/opencode.jsonc"
+  roles:
+    - paseo
