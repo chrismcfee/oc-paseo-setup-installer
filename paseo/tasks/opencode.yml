@@ -1,0 +1,134 @@
+---
+# Everything OpenCode-side. Two independent blocks:
+#   A) discover the config path -> optionally fetch it back -> optionally inject the MCP block
+#   B) print OpenCode's effective (merged) config to the play output
+# Runs as paseo_user with that user's HOME so XDG / OPENCODE_CONFIG / project-local resolve right.
+
+# ===========================================================================
+# A) discover + fetch + wire   (only when we need a concrete config path)
+# ===========================================================================
+- name: Resolve / fetch / wire the OpenCode config
+  when: (paseo_manage_opencode_mcp | bool) or (paseo_fetch_opencode_config | bool)
+  block:
+    - name: Resolve the OpenCode config path on the target
+      ansible.builtin.script: >-
+        resolve-opencode-config.sh --explain{{ (' --cwd ' ~ paseo_opencode_config_cwd)
+          if (paseo_opencode_config_cwd | length > 0) else '' }}
+      args:
+        executable: /bin/sh
+      environment:
+        HOME: "{{ paseo_home_dir }}"
+      become: true
+      become_user: "{{ paseo_user }}"
+      register: _paseo_oc_resolve
+      changed_when: false
+      when:
+        - paseo_discover_opencode_config | bool
+        - paseo_opencode_config_path | length == 0
+
+    - name: Adopt the resolved OpenCode config path
+      ansible.builtin.set_fact:
+        paseo_opencode_config_path: "{{ _paseo_oc_resolve.stdout | trim }}"
+      when:
+        - _paseo_oc_resolve.stdout is defined
+        - (_paseo_oc_resolve.stdout | trim) | length > 0
+        - paseo_opencode_config_path | length == 0
+
+    - name: Require a known OpenCode config path
+      ansible.builtin.assert:
+        that: paseo_opencode_config_path | length > 0
+        fail_msg: >-
+          Could not determine an OpenCode config path. Set paseo_opencode_config_path explicitly,
+          or provide OPENCODE_CONFIG / paseo_opencode_config_cwd so discovery can resolve it.
+        quiet: true
+
+    - name: Stat the resolved OpenCode config
+      ansible.builtin.stat:
+        path: "{{ paseo_opencode_config_path }}"
+      become: true
+      become_user: "{{ paseo_user }}"
+      register: _paseo_oc_stat
+
+    # ---- pull the config back to the controller (per host: <dir>/<host>/<path>) ----
+    - name: Fetch the OpenCode config to the controller
+      ansible.builtin.fetch:
+        src: "{{ paseo_opencode_config_path }}"
+        dest: "{{ paseo_opencode_config_fetch_dir }}/"
+        flat: false
+      become: true
+      become_user: "{{ paseo_user }}"
+      when:
+        - paseo_fetch_opencode_config | bool
+        - _paseo_oc_stat.stat.exists
+
+    - name: Report when there is nothing to fetch
+      ansible.builtin.debug:
+        msg: >-
+          No OpenCode config at {{ paseo_opencode_config_path }} to fetch.
+          (Enable paseo_manage_opencode_mcp to create one with the paseo MCP block.)
+      when:
+        - paseo_fetch_opencode_config | bool
+        - not _paseo_oc_stat.stat.exists
+
+    # ---- inject the paseo MCP block (Direction B): deep-merge, nothing else touched ----
+    - name: Read existing OpenCode config (for merge)
+      ansible.builtin.slurp:
+        src: "{{ paseo_opencode_config_path }}"
+      register: _paseo_oc_raw
+      failed_when: false
+      become: true
+      become_user: "{{ paseo_user }}"
+      when: paseo_manage_opencode_mcp | bool
+
+    - name: Ensure the OpenCode config directory exists
+      ansible.builtin.file:
+        path: "{{ paseo_opencode_config_path | dirname }}"
+        state: directory
+        owner: "{{ paseo_user }}"
+        group: "{{ paseo_group }}"
+        mode: "0750"
+      become: true
+      when: paseo_manage_opencode_mcp | bool
+
+    - name: Merge the paseo MCP block into the OpenCode config
+      ansible.builtin.copy:
+        content: >-
+          {{ ((_paseo_oc_raw.content | b64decode | from_json)
+                if (_paseo_oc_raw.content is defined and (_paseo_oc_raw.content | length) > 0)
+                else {'$schema': 'https://opencode.ai/config.json'})
+             | combine({'mcp': {'paseo': {
+                 'type': 'remote',
+                 'url': paseo_opencode_mcp_url,
+                 'enabled': true,
+                 'oauth': false,
+                 'headers': {'Authorization': 'Bearer {env:PASEO_PASSWORD}'}
+               }}}, recursive=True)
+             | to_nice_json }}
+        dest: "{{ paseo_opencode_config_path }}"
+        owner: "{{ paseo_user }}"
+        group: "{{ paseo_group }}"
+        mode: "0644"
+      become: true
+      when: paseo_manage_opencode_mcp | bool
+
+# ===========================================================================
+# B) print OpenCode's effective (merged) config
+# ===========================================================================
+- name: Print OpenCode's effective config
+  when: paseo_print_opencode_config | bool
+  block:
+    - name: Compute the effective OpenCode config
+      ansible.builtin.script: >-
+        opencode-effective-config.py --explain{{ (' --cwd ' ~ paseo_opencode_config_cwd)
+          if (paseo_opencode_config_cwd | length > 0) else '' }}{{ ' --raw'
+          if (paseo_print_opencode_config_raw | bool) else '' }}
+      environment:
+        HOME: "{{ paseo_home_dir }}"
+      become: true
+      become_user: "{{ paseo_user }}"
+      register: _paseo_oc_effective
+      changed_when: false
+
+    - name: Show the effective OpenCode config
+      ansible.builtin.debug:
+        var: _paseo_oc_effective.stdout_lines

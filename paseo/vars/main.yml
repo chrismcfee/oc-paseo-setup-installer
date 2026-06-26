@@ -1,0 +1,7 @@
+---
+# Internal — not meant to be overridden per host.
+paseo_node_packages:
+  Gentoo: net-libs/nodejs
+  Debian:
+    - nodejs
+    - npm

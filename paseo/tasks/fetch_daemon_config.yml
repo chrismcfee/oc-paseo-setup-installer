@@ -1,0 +1,59 @@
+---
+# Grab each host's daemon config.json back to the controller. Redacted by default — the bcrypt
+# password hash (and any inline credentials) are stripped before the file leaves the host. Set
+# paseo_daemon_config_redact: false to pull the raw file instead.
+
+- name: Stat the daemon config
+  ansible.builtin.stat:
+    path: "{{ paseo_state_dir }}/config.json"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_cfg_stat
+
+- name: Require a daemon config to grab
+  ansible.builtin.assert:
+    that: _paseo_cfg_stat.stat.exists
+    fail_msg: "No config.json at {{ paseo_state_dir }}/config.json on this host yet."
+    quiet: true
+
+# --------------------------------------------------------------------------
+# Redacted (default): produce a sanitized copy on the host, save it to the controller
+# at <fetch_dir>/<host>/config.json
+# --------------------------------------------------------------------------
+- name: Produce a redacted copy of the daemon config
+  ansible.builtin.script: "redact-json.py {{ paseo_state_dir }}/config.json"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_cfg_redacted
+  changed_when: false
+  when: paseo_daemon_config_redact | bool
+
+- name: Ensure the controller destination exists
+  ansible.builtin.file:
+    path: "{{ paseo_daemon_config_fetch_dir }}/{{ inventory_hostname }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  when: paseo_daemon_config_redact | bool
+
+- name: Save the redacted daemon config to the controller
+  ansible.builtin.copy:
+    content: "{{ _paseo_cfg_redacted.stdout }}\n"
+    dest: "{{ paseo_daemon_config_fetch_dir }}/{{ inventory_hostname }}/config.json"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  when: paseo_daemon_config_redact | bool
+
+# --------------------------------------------------------------------------
+# Raw (opt-in): fetch the unmodified file -> <fetch_dir>/<host>/<remote/path>/config.json
+# --------------------------------------------------------------------------
+- name: Fetch the raw daemon config to the controller
+  ansible.builtin.fetch:
+    src: "{{ paseo_state_dir }}/config.json"
+    dest: "{{ paseo_daemon_config_fetch_dir }}/"
+    flat: false
+  become: true
+  become_user: "{{ paseo_user }}"
+  when: not (paseo_daemon_config_redact | bool)

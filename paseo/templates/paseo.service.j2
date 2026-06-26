@@ -1,0 +1,34 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=Paseo daemon
+After=network-online.target{% if paseo_after_netbird %} {{ paseo_netbird_unit }}.service{% endif %}
+
+Wants=network-online.target{% if paseo_after_netbird %} {{ paseo_netbird_unit }}.service{% endif %}
+
+
+[Service]
+Type=simple
+User={{ paseo_user }}
+Group={{ paseo_group }}
+Environment=PASEO_HOME={{ paseo_state_dir }}
+# PATH so the daemon can find the agent CLI (opencode/claude/codex) it launches as a subprocess.
+Environment=PATH={{ paseo_service_path }}
+# NOTE: listen/hostnames are owned by config.json. Do NOT add PASEO_LISTEN here — env overrides
+# config.json (precedence trap) and you'll wonder why config edits "do nothing".
+#
+# `daemon start` self-detaches and exits 0. We run it in the foreground ({{ paseo_foreground_flag | default('(no flag set!)', true) }})
+# so the worker is the main PID and Restart= actually supervises it. Verify the flag on your build.
+ExecStart={{ paseo_bin }} daemon start{% if paseo_foreground_flag %} {{ paseo_foreground_flag }}{% endif %}
+
+Restart=on-failure
+RestartSec={{ paseo_restart_sec }}
+NoNewPrivileges=true
+ProtectSystem=strict
+{% if paseo_systemd_protect_home %}
+ProtectHome=true
+{% endif %}
+ReadWritePaths={{ paseo_home_dir }}
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

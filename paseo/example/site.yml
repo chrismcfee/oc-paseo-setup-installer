@@ -1,0 +1,12 @@
+---
+# ansible-galaxy collection install -r roles/paseo/requirements.yml
+# ansible-playbook -i example/inventory.yml example/site.yml --ask-vault-pass
+- name: Deploy the Paseo fleet
+  hosts: paseo_fleet
+  become: true
+  vars:
+    # One shared secret pushed via Vault (NetBird is the real access boundary), or move this into
+    # host_vars for a distinct password per box. See group_vars/paseo_fleet/vault.yml.example.
+    paseo_daemon_password: "{{ vault_paseo_daemon_password }}"
+  roles:
+    - paseo

@@ -1,0 +1,39 @@
+#!/sbin/openrc-run
+{{ ansible_managed | comment }}
+name="paseo"
+description="Paseo daemon"
+
+: ${PASEO_USER:={{ paseo_user }}}
+: ${PASEO_HOME:={{ paseo_state_dir }}}
+PASEO_BIN="{{ paseo_bin }}"
+# PATH so the daemon finds the agent CLI (opencode) it spawns.
+PASEO_PATH="{{ paseo_service_path }}"
+export PASEO_HOME
+
+# Delegation wrapper: paseo's own `daemon start` self-detaches, so we do NOT set
+# command_background (that double-backgrounds it -> status reports "crashed" while the daemon is
+# fine, plus orphan workers on restart). Tradeoff: no auto-restart-on-crash. For that, point
+# supervise-daemon at paseo's foreground mode instead (see README).
+
+depend() {
+    need net
+{% if paseo_after_netbird %}
+    after {{ paseo_netbird_unit }}    # mesh IP must exist before bind (else EADDRNOTAVAIL)
+{% endif %}
+}
+
+start() {
+    ebegin "Starting paseo"
+    su -s /bin/sh "$PASEO_USER" -c "PATH='$PASEO_PATH' PASEO_HOME='$PASEO_HOME' '$PASEO_BIN' daemon start"
+    eend $?
+}
+
+stop() {
+    ebegin "Stopping paseo"
+    su -s /bin/sh "$PASEO_USER" -c "PASEO_HOME='$PASEO_HOME' '$PASEO_BIN' daemon stop"
+    eend $?
+}
+
+status() {
+    su -s /bin/sh "$PASEO_USER" -c "PASEO_HOME='$PASEO_HOME' '$PASEO_BIN' daemon status"
+}

@@ -1,0 +1,29 @@
+---
+galaxy_info:
+  role_name: paseo
+  namespace: homelab
+  author: homelab
+  description: >-
+    Deploy and supervise a headless Paseo daemon over a NetBird mesh, one daemon per host,
+    with OpenCode wiring. Templates config (never state), leaves keypair generation to each box.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Gentoo
+    - name: Debian
+      versions:
+        - all
+    - name: Ubuntu
+      versions:
+        - all
+  galaxy_tags:
+    - paseo
+    - opencode
+    - netbird
+    - openrc
+    - systemd
+    - mesh
+    - gentoo
+    - homelab
+
+dependencies: []

@@ -1,0 +1,39 @@
+---
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: paseo.service.j2
+    dest: /etc/systemd/system/paseo.service
+    mode: "0644"
+  when: paseo_init_system == 'systemd'
+  notify:
+    - reload systemd
+    - restart paseo
+
+- name: Install OpenRC service script
+  ansible.builtin.template:
+    src: paseo.openrc.j2
+    dest: /etc/init.d/paseo
+    mode: "0755"
+  when: paseo_init_system == 'openrc'
+  notify:
+    - update openrc deps
+    - restart paseo
+
+- name: Install OpenRC conf.d
+  ansible.builtin.template:
+    src: paseo.conf.d.j2
+    dest: /etc/conf.d/paseo
+    mode: "0640"
+  when: paseo_init_system == 'openrc'
+  notify: restart paseo
+
+# Make the unit known (systemd reload / openrc dep cache) and apply any pending restart
+# before we enable+start, so the service is registered when we act on it.
+- name: Apply unit/config changes before enable
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start paseo
+  ansible.builtin.service:
+    name: paseo
+    enabled: "{{ paseo_service_enabled }}"
+    state: "{{ paseo_service_state }}"

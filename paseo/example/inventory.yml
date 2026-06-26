@@ -1,0 +1,24 @@
+---
+# The §7 topology: one daemon per box, each binding its own NetBird IP, all added as hosts in
+# one client. Replace 100.x.x.x with real mesh IPs. Names are the legible labels you'll see in
+# the client (and your "which model stack lives where" map).
+all:
+  children:
+    paseo_fleet:
+      hosts:
+        cargogen2:
+          ansible_host: 100.64.0.1
+          paseo_listen: "100.64.0.1:6767"
+          paseo_hostnames: ["cargogen2"]
+
+        ryzen-4090:
+          ansible_host: 100.64.0.2
+          paseo_listen: "100.64.0.2:6767"
+          paseo_hostnames: ["ryzen-4090"]
+
+        pi-livingroom:
+          ansible_host: 100.64.0.3
+          paseo_listen: "100.64.0.3:6767"
+          paseo_hostnames: ["pi-livingroom"]
+          # Example: Node managed elsewhere on the Pi (or you installed a newer one from NodeSource)
+          paseo_manage_node: false

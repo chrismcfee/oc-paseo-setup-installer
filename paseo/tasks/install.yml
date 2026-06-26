@@ -1,0 +1,150 @@
+---
+# ----------------------------------------------------------------------------
+# Service user + state directory
+# ----------------------------------------------------------------------------
+- name: Ensure paseo group
+  ansible.builtin.group:
+    name: "{{ paseo_group }}"
+    system: true
+
+- name: Ensure paseo service user
+  ansible.builtin.user:
+    name: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    system: true
+    create_home: true
+    home: "{{ paseo_home_dir }}"
+    shell: "{{ paseo_user_shell }}"
+
+- name: Ensure PASEO_HOME state directory
+  ansible.builtin.file:
+    path: "{{ paseo_state_dir }}"
+    state: directory
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0750"
+
+# Guarantee a valid JSON file exists before set-password / the config merge touch it.
+# force:false => never clobbers a real config (or a generated keypair's neighbours).
+- name: Seed empty daemon config if absent
+  ansible.builtin.copy:
+    content: "{}\n"
+    dest: "{{ paseo_state_dir }}/config.json"
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0600"
+    force: false
+
+# ----------------------------------------------------------------------------
+# Node.js + GitHub CLI  (skippable via paseo_manage_node)
+# ----------------------------------------------------------------------------
+- name: Enable the npm USE flag for Node (Gentoo)
+  ansible.builtin.copy:
+    dest: /etc/portage/package.use/paseo-nodejs
+    content: "net-libs/nodejs npm\n"
+    mode: "0644"
+  when:
+    - paseo_manage_node | bool
+    - ansible_os_family == 'Gentoo'
+
+- name: Install Node.js (Gentoo)
+  community.general.portage:
+    package: "{{ paseo_node_packages['Gentoo'] }}"
+    state: present
+  when:
+    - paseo_manage_node | bool
+    - ansible_os_family == 'Gentoo'
+
+- name: Install GitHub CLI (Gentoo)
+  community.general.portage:
+    package: dev-vcs/github-cli
+    state: present
+  when:
+    - paseo_install_github_cli | bool
+    - ansible_os_family == 'Gentoo'
+
+- name: Install Node.js + npm (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name: "{{ paseo_node_packages['Debian'] }}"
+    state: present
+    update_cache: true
+  when:
+    - paseo_manage_node | bool
+    - ansible_os_family == 'Debian'
+
+- name: Install GitHub CLI (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name: gh
+    state: present
+  when:
+    - paseo_install_github_cli | bool
+    - ansible_os_family == 'Debian'
+
+# ----------------------------------------------------------------------------
+# Version gate — fail fast on too-old Node (distro packages on the Pi, etc.)
+# ----------------------------------------------------------------------------
+- name: Query Node.js version
+  ansible.builtin.command: node --version
+  register: _paseo_node_version
+  changed_when: false
+  failed_when: false
+
+- name: Assert Node.js is installed
+  ansible.builtin.assert:
+    that: _paseo_node_version.rc == 0
+    fail_msg: >-
+      Node.js not found on PATH. Set paseo_manage_node: true, or install Node {{ paseo_min_node_major }}+
+      yourself before running this role.
+    quiet: true
+
+- name: Assert Node.js meets the minimum major version
+  ansible.builtin.assert:
+    that: "(_paseo_node_version.stdout | regex_replace('^v([0-9]+).*$', '\\1') | int) >= (paseo_min_node_major | int)"
+    fail_msg: >-
+      Paseo needs Node {{ paseo_min_node_major }}+ but found {{ _paseo_node_version.stdout }}.
+      On Debian/Ubuntu the distro Node is usually too old — install from NodeSource and re-run,
+      or set paseo_manage_node: false and provide a newer Node yourself.
+    quiet: true
+
+# ----------------------------------------------------------------------------
+# Per-user npm prefix + the Paseo CLI
+# ----------------------------------------------------------------------------
+- name: Set the per-user npm prefix
+  ansible.builtin.command:
+    cmd: npm config set prefix "{{ paseo_npm_prefix }}"
+  environment:
+    HOME: "{{ paseo_home_dir }}"
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+  become: true
+  become_user: "{{ paseo_user }}"
+  changed_when: false
+
+- name: Install the Paseo CLI (global, into the per-user prefix)
+  community.general.npm:
+    name: "{{ paseo_cli_package }}"
+    version: "{{ paseo_cli_version | default(omit, true) }}"
+    global: true
+    state: "{{ 'latest' if (paseo_cli_version | length == 0) else 'present' }}"
+  environment:
+    HOME: "{{ paseo_home_dir }}"
+    NPM_CONFIG_PREFIX: "{{ paseo_npm_prefix }}"
+    PATH: "{{ paseo_bin_dir }}:/usr/local/bin:/usr/bin:/bin"
+  become: true
+  become_user: "{{ paseo_user }}"
+  notify: restart paseo
+
+- name: Symlink the paseo CLI into /usr/local/bin
+  ansible.builtin.file:
+    src: "{{ paseo_bin }}"
+    dest: /usr/local/bin/paseo
+    state: link
+    force: true
+  when: paseo_symlink_cli | bool
+
+- name: Symlink the agent CLI (opencode) into /usr/local/bin for spawn PATH
+  ansible.builtin.file:
+    src: "{{ paseo_opencode_bin }}"
+    dest: /usr/local/bin/opencode
+    state: link
+    force: true
+  when: paseo_opencode_bin | length > 0

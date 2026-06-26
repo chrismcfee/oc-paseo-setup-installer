@@ -1,0 +1,18 @@
+---
+# Handlers run in DEFINITION order, so reload/dep-cache always precede restart.
+
+- name: reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: paseo_init_system == 'systemd'
+
+- name: update openrc deps
+  ansible.builtin.command: rc-update -u
+  when: paseo_init_system == 'openrc'
+  changed_when: false
+
+- name: restart paseo
+  ansible.builtin.service:
+    name: paseo
+    state: restarted
+  when: paseo_service_state == 'started'

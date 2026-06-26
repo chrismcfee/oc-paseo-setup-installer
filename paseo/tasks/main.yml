@@ -1,0 +1,42 @@
+---
+- name: Validate required inputs
+  ansible.builtin.assert:
+    that:
+      - paseo_listen | length > 0
+      - "(not paseo_set_password) or (paseo_daemon_password | length > 0)"
+      - paseo_init_system in ['systemd', 'openrc']
+    fail_msg: >-
+      Check vars: paseo_listen must be set; paseo_daemon_password is required when
+      paseo_set_password is true; paseo_init_system must be 'systemd' or 'openrc'
+      (auto-detected here as '{{ paseo_init_system }}').
+    quiet: true
+
+# Auto-add the listen IP to the Host-header allowlist (runbook §4 trap-avoidance).
+- name: Compute effective Host-header allowlist
+  ansible.builtin.set_fact:
+    paseo_effective_hostnames: >-
+      {{ (paseo_hostnames + [paseo_listen | regex_replace(':[0-9]+$', '')]) | unique }}
+
+- name: Install user, Node and the Paseo CLI
+  ansible.builtin.import_tasks: install.yml
+
+- name: Manage the daemon password
+  ansible.builtin.import_tasks: password.yml
+  when: paseo_set_password | bool
+
+- name: Template the daemon config
+  ansible.builtin.import_tasks: config.yml
+
+- name: Discover / fetch / print / wire the OpenCode config
+  ansible.builtin.import_tasks: opencode.yml
+  when: >-
+    (paseo_manage_opencode_mcp | bool)
+    or (paseo_fetch_opencode_config | bool)
+    or (paseo_print_opencode_config | bool)
+
+- name: Grab the daemon config back to the controller
+  ansible.builtin.import_tasks: fetch_daemon_config.yml
+  when: paseo_fetch_daemon_config | bool
+
+- name: Install and start the service
+  ansible.builtin.import_tasks: service.yml

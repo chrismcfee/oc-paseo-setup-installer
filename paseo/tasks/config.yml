@@ -1,0 +1,33 @@
+---
+# Template *config*, never *state*. We read the existing config.json (which set-password may have
+# stamped a bcrypt hash into) and deep-merge only the keys we own — listen, hostnames, worktrees —
+# so the password hash and any keys we don't know about survive. We never touch daemon-keypair.json:
+# each box generates its own identity on first start.
+
+- name: Read existing daemon config
+  ansible.builtin.slurp:
+    src: "{{ paseo_state_dir }}/config.json"
+  register: _paseo_existing_config_raw
+  failed_when: false
+
+- name: Compose merged daemon config
+  ansible.builtin.set_fact:
+    _paseo_merged_config: >-
+      {{ ((_paseo_existing_config_raw.content | b64decode | from_json)
+            if (_paseo_existing_config_raw.content is defined) else {})
+         | combine({
+             'daemon': {
+               'listen': paseo_listen,
+               'hostnames': paseo_effective_hostnames
+             },
+             'worktrees': {'root': paseo_worktrees_root}
+           }, recursive=True) }}
+
+- name: Write daemon config.json
+  ansible.builtin.copy:
+    content: "{{ _paseo_merged_config | to_nice_json }}\n"
+    dest: "{{ paseo_state_dir }}/config.json"
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0600"
+  notify: restart paseo

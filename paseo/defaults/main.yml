@@ -1,0 +1,126 @@
+---
+# =============================================================================
+# Identity / service user
+# =============================================================================
+paseo_user: paseo
+paseo_group: paseo
+# Home lives under /var/lib (NOT /home) on purpose: a hardened systemd unit with
+# ProtectHome=true can still write here. See "own-user mode" in the README if you
+# instead run the daemon as your login user (home under /home).
+paseo_home_dir: /var/lib/paseo
+paseo_user_shell: /bin/bash
+
+# PASEO_HOME — where config.json, daemon.log, daemon-keypair.json and worktrees/ live.
+# Give each daemon-on-a-host a distinct value if you ever run more than one per box.
+paseo_state_dir: "{{ paseo_home_dir }}/.paseo"
+
+# =============================================================================
+# Node.js + npm + the Paseo CLI
+# =============================================================================
+# Set false if you manage Node yourself (nvm/asdf/already-present). The version
+# assertion below still runs so you fail fast on too-old Node.
+paseo_manage_node: true
+paseo_install_github_cli: true
+paseo_min_node_major: 20
+
+paseo_npm_prefix: "{{ paseo_home_dir }}/.npm-global"
+paseo_bin_dir: "{{ paseo_npm_prefix }}/bin"
+paseo_bin: "{{ paseo_bin_dir }}/paseo"
+
+paseo_cli_package: "@getpaseo/cli"
+paseo_cli_version: ""            # pin a version e.g. "1.4.2"; empty = track latest
+
+paseo_symlink_cli: true          # symlink paseo into /usr/local/bin for admin convenience
+# If the daemon runs as a dedicated user, the agent CLI it spawns (opencode) must be
+# on that user's PATH. We bake PATH into the unit (below), but symlinking the binary
+# into /usr/local/bin is the belt-and-suspenders fix. Point this at your opencode binary.
+paseo_opencode_bin: ""           # e.g. /usr/bin/opencode — empty = skip the symlink
+
+# PATH the daemon runs with. The npm prefix bin comes first so a per-user opencode is
+# found when Paseo launches it (runbook §9 "can't find binary"). REVIEW FIX.
+paseo_service_path: "{{ paseo_bin_dir }}:/usr/local/bin:/usr/bin:/bin"
+
+# =============================================================================
+# Network / bind (NetBird mesh) — OVERRIDE PER HOST
+# =============================================================================
+# Bind to the mesh IP, never 0.0.0.0. The listen IP is auto-added to the Host-header
+# allowlist so you don't hit the "open port + valid password, still rejected" trap.
+paseo_listen: "127.0.0.1:6767"           # per host: "100.x.x.x:6767"
+paseo_hostnames:                          # extra Host-header names (the listen IP is added for you)
+  - localhost
+  - 127.0.0.1
+paseo_worktrees_root: "{{ paseo_state_dir }}/worktrees"
+
+# =============================================================================
+# Service / init system
+# =============================================================================
+paseo_init_system: "{{ ansible_service_mgr }}"   # auto-detected: 'systemd' or 'openrc'
+paseo_service_enabled: true
+paseo_service_state: started
+
+# Order the daemon after NetBird so the mesh IP exists before bind (EADDRNOTAVAIL otherwise).
+paseo_after_netbird: true
+paseo_netbird_unit: netbird                       # systemd: <name>.service ; openrc: after <name>
+
+# CRITICAL (systemd): `paseo daemon start` is a self-detaching launcher that exits 0.
+# Under Type=simple that gets the real worker SIGTERM'd at launcher exit (KillMode=control-group)
+# — the exact double-detach bug the runbook avoids for OpenRC. We run it in the FOREGROUND so the
+# worker IS the main PID and Restart=on-failure actually supervises it. REVIEW FIX.
+# >>> VERIFY this flag on your build: `paseo daemon start --help` (could be --no-detach / run). <<<
+paseo_foreground_flag: "--foreground"
+paseo_restart_sec: 3
+
+# systemd hardening. Keep ProtectHome=true ONLY while home is under /var/lib. If you run the
+# daemon as your login user (home under /home, "own-user mode" for Direction A), set this false
+# or opencode can't read its config/creds.
+paseo_systemd_protect_home: true
+
+# =============================================================================
+# Auth (Ansible Vault)
+# =============================================================================
+# Set false to rely on the NetBird mesh as the sole access boundary (no daemon password).
+paseo_set_password: true
+paseo_daemon_password: ""        # REQUIRED when paseo_set_password — pull from Vault
+
+# How the password is fed to `set-password`. The runbook shows an interactive prompt; the exact
+# non-interactive form depends on your build. Default pipes it on stdin (one newline appended).
+# Override argv if your build uses a flag (e.g. ["{{ paseo_bin }}","daemon","set-password","--stdin"]).
+# For builds that prompt twice, put the password on two lines in paseo_set_password_stdin.
+paseo_set_password_argv: ["{{ paseo_bin }}", "daemon", "set-password"]
+paseo_set_password_stdin: "{{ paseo_daemon_password }}"
+
+# =============================================================================
+# OpenCode MCP client wiring — Direction B (runbook §5), optional
+# =============================================================================
+# Injects only the `mcp.paseo` block into an existing opencode.json (deep-merge, your other
+# config is preserved). oauth:false + {env:PASEO_PASSWORD} per §5; a launched OpenCode reading
+# this also sidesteps bug #914 (§6).
+paseo_manage_opencode_mcp: false
+paseo_opencode_mcp_url: "http://127.0.0.1:6767/mcp/agents"
+
+# OpenCode config discovery / fetch
+# Leave paseo_opencode_config_path empty to auto-resolve it on the target (honors OPENCODE_CONFIG,
+# XDG, and — if paseo_opencode_config_cwd is set — a project-local opencode.json). Set it to skip
+# discovery and target a specific file.
+paseo_opencode_config_path: ""
+paseo_discover_opencode_config: true
+paseo_opencode_config_cwd: ""            # if set, also consider a project-local config under this dir
+# Pull the resolved config back to the controller, one copy per host:
+#   <fetch_dir>/<inventory_hostname>/<remote/path/opencode.json>
+paseo_fetch_opencode_config: false
+paseo_opencode_config_fetch_dir: "./fetched-opencode"
+
+# Print OpenCode's effective (merged) config to the play output. Reproduces opencode's
+# global+project+OPENCODE_CONFIG merge from the files (an approximation — see README).
+paseo_print_opencode_config: false
+paseo_print_opencode_config_raw: false        # default redacts secrets; true keeps them
+
+# =============================================================================
+# Daemon config.json export (grab it back to the controller)
+# =============================================================================
+paseo_fetch_daemon_config: false
+paseo_daemon_config_fetch_dir: "./fetched-daemon-config"
+# Redacted by default: the bcrypt password hash is stripped before the file leaves the host.
+# Saved to <fetch_dir>/<host>/config.json. Set false to fetch the raw file instead
+# (lands at <fetch_dir>/<host>/<remote/path>/config.json).
+paseo_daemon_config_redact: true
