@@ -44,5 +44,12 @@
   ansible.builtin.import_tasks: fetch_daemon_config.yml
   when: paseo_fetch_daemon_config | bool
 
+- name: Allow the service to execute its binaries under SELinux (RedHat/Fedora)
+  ansible.builtin.import_tasks: selinux.yml
+  when:
+    - paseo_manage_selinux | bool
+    - ansible_os_family == 'RedHat'
+    - (ansible_selinux.status is defined) and (ansible_selinux.status == 'enabled')
+
 - name: Install and start the service
   ansible.builtin.import_tasks: service.yml

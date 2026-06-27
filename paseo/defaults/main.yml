@@ -83,6 +83,11 @@ paseo_restart_sec: 3
 # or opencode can't read its config/creds.
 paseo_systemd_protect_home: true
 
+# SELinux (RedHat/Fedora): the systemd service can't execute the Paseo CLI / OpenCode under
+# /var/lib (they're labeled var_lib_t -> 203/EXEC). When true, the role relabels them bin_t. Set
+# false only if you manage SELinux yourself or run permissive/disabled.
+paseo_manage_selinux: true
+
 # =============================================================================
 # Auth (Ansible Vault)
 # =============================================================================
