@@ -131,7 +131,7 @@
 
 - name: Assert Node.js meets the minimum major version
   ansible.builtin.assert:
-    that: "(_paseo_node_version.stdout | regex_replace('^v([0-9]+).*$', '\\1') | int) >= (paseo_min_node_major | int)"
+    that: "(_paseo_node_version.stdout | regex_search('[0-9]+') | int) >= (paseo_min_node_major | int)"
     fail_msg: >-
       Paseo needs Node {{ paseo_min_node_major }}+ but found {{ _paseo_node_version.stdout }}.
       On Debian/Ubuntu the distro Node is usually too old — install from NodeSource and re-run,

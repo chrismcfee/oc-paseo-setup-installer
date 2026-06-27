@@ -30,6 +30,10 @@ auth.json
 /fetched-opencode/
 /fetched-daemon-config/
 
+# --- Local smoke-test scaffolding (run it, then ./test-local-teardown.sh) ---
+/test-local.yml
+/test-local-teardown.sh
+
 # --- Tooling / machine-local ---
 .claude/settings.local.json
 *.retry

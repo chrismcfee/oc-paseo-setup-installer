@@ -8,7 +8,7 @@
 #
 # The plaintext is staged in a private (umask 077) temp file and handed to `ansible-vault encrypt` —
 # secret VALUES are never printed. The vault password comes from the repo's vault-pass.sh resolver
-# (env var / .vault_pass / keyring, or it prompts). Run it on the box that holds the real .env.
+# (env var / .vault_pass / keyring — set one up first). Run it on the box that holds the real .env.
 #
 #   ./make-vault.sh [ENV_FILE] [OUT_FILE]
 #     ENV_FILE  default: ~/.config/opencode/.env

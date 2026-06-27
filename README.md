@@ -105,12 +105,12 @@ ansible-galaxy collection install -r paseo/requirements.yml
 # 2. Your OpenCode config already lives at ./opencode.jsonc (secrets are {env:VAR} placeholders).
 #    Edit inventory.yml with your real hosts + NetBird mesh IPs.
 
-# 3. Build the encrypted vault from your OpenCode secrets .env (values never hit your terminal):
-cp group_vars/paseo_fleet/vault.yml.example group_vars/paseo_fleet/vault.yml   # optional, for reference
-./make-vault.sh                       # reads ~/.config/opencode/.env → group_vars/paseo_fleet/vault.yml
-
-# 4. (optional) make vault prompt-free — store the password once in your keyring:
+# 3. Choose your vault password ONCE — vault-pass.sh resolves it for every run (no --ask-vault-pass).
+#    Keyring (recommended), or an env var / a ./.vault_pass file:
 secret-tool store --label="paseo ansible vault" service ansible-vault key paseo
+
+# 4. Build the encrypted vault from your OpenCode secrets .env (values never hit your terminal):
+./make-vault.sh                       # reads ~/.config/opencode/.env → group_vars/paseo_fleet/vault.yml
 
 # 5. Go (systemd or OpenRC, auto-detected per host):
 ansible-playbook site.yml --ask-become-pass
@@ -163,8 +163,9 @@ The split is deliberate: **structure is committed, values never are.**
 - **At run time:** Ansible decrypts it in memory; the values are written to each target at
   `/etc/paseo/paseo.env` (`0640 root:paseo`), loaded by the service.
 - **The vault password** is resolved by [`vault-pass.sh`](vault-pass.sh) (wired via `ansible.cfg`), in
-  order: `$ANSIBLE_VAULT_PASSWORD` → `./.vault_pass` → system keyring → interactive prompt. So you
-  never pass `--ask-vault-pass`, and the password itself is never stored in the repo.
+  order: `$ANSIBLE_VAULT_PASSWORD` → `./.vault_pass` → system keyring. Set up **one** source once and
+  you never pass `--ask-vault-pass`; the password itself is never stored in the repo. Ansible reads it
+  for every command, so set a source before running — `vault-pass.sh` prints how if you haven't.
 
 To rotate or add keys: edit `~/.config/opencode/.env`, re-run `./make-vault.sh`, re-run the play.
 

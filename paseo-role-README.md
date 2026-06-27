@@ -33,13 +33,13 @@ ansible-galaxy collection install -r paseo/requirements.yml
 # 1. Your sanitized OpenCode config is at the repo root as opencode.jsonc (secrets already
 #    replaced by {env:VAR}). Put real mesh IPs in inventory.yml.
 
-# 2. Secrets -> encrypted Vault in one shot (reads your OpenCode .env, derives the daemon password
-#    from PASEO_TOKEN, prompts for a vault password). Values never hit your terminal:
+# 2. Set a vault password source once (keyring/env/file — see vault-pass.sh), then build the encrypted
+#    Vault from your OpenCode .env (derives the daemon password from PASEO_TOKEN). Values never print:
 ./make-vault.sh                       # writes group_vars/paseo_fleet/vault.yml (encrypted)
 #    (or do it by hand: ./opencode-secrets-from-env.sh >> vault.yml ; ansible-vault encrypt vault.yml)
 
 # 3. Go (systemd or OpenRC, auto-detected per host). The vault password auto-resolves via
-#    vault-pass.sh (env var / .vault_pass / keyring, or it prompts) — no --ask-vault-pass needed.
+#    vault-pass.sh (env var / .vault_pass / keyring) — no --ask-vault-pass needed.
 ansible-playbook site.yml --ask-become-pass
 ```
 
