@@ -11,8 +11,9 @@
   hosts: paseo_fleet
   become: true
   vars:
-    # The Paseo daemon password, from Vault (group_vars/paseo_fleet/vault.yml).
-    paseo_daemon_password: "{{ vault_paseo_daemon_password }}"
+    # Daemon passwords are PER HOST: inventory.yml sets paseo_daemon_password from the
+    # vault_paseo_daemon_password_<host> vars in group_vars/paseo_fleet/vault.yml. (No play-level
+    # value here — play vars would override the per-host ones.)
     # Deploy the sanitized OpenCode config kept at the repo root. Its secrets are {env:VAR}
     # placeholders; the real values come from paseo_opencode_secrets (also in Vault) and are
     # injected into the daemon's environment. Lands at the daemon user's ~/.config/opencode/.

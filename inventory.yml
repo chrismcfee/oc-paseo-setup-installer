@@ -11,11 +11,50 @@
 all:
   children:
     paseo_fleet:
+      # Injected into every daemon's environment (written to /etc/paseo/paseo.env, loaded by the unit)
+      # so the OpenCode that Paseo launches inherits them. Non-secret env (like the searx URL) is fine
+      # here; real provider keys belong in group_vars/paseo_fleet/vault.yml. NOTE: if you later define
+      # paseo_opencode_secrets in the Vault, it REPLACES this dict wholesale (dicts don't merge across
+      # files) — so move this line into that dict then, don't leave it split across two places.
+      vars:
+        paseo_opencode_secrets:
+          OPENSEARCH_WEB_URL: "https://searx.perennialte.ch/"
       hosts:
         box-a:
-          ansible_host: 100.64.0.1
-          paseo_listen: "100.64.0.1:6767"
-          paseo_hostnames: ["box-a"]
+          ansible_host: cargo.netpegasus.horse
+          paseo_listen: "cargo.netpegasus.horse:6767"
+          paseo_hostnames: ["cargo"]
+        # Credentials come from the encrypted vault (group_vars/paseo_fleet/vault.yml, gitignored).
+        # ansible_password / paseo_daemon_password resolve at connection/play time; nothing secret
+        # lives in this tracked file. Edit secrets with: ansible-vault edit group_vars/paseo_fleet/vault.yml
+        gentoo:
+          ansible_host: cargogen2.netpegasus.horse
+          ansible_user: eris
+          ansible_password: "{{ vault_ssh_password_gentoo }}"
+          paseo_daemon_password: "{{ vault_paseo_daemon_password_gentoo }}"
+          paseo_listen: "cargogen2.netpegasus.horse:6767"
+          paseo_hostnames: ["cargogen2"]
+        arch:
+          ansible_host: lunardevarchvm5.netpegasus.horse
+          ansible_user: lunardev
+          ansible_password: "{{ vault_ssh_password_arch }}"
+          paseo_daemon_password: "{{ vault_paseo_daemon_password_arch }}"
+          paseo_listen: "0.0.0.0:6767"
+          paseo_hostnames: ["lunardevarchvm5"]
+        archtest:
+          ansible_host: damed.netpegasus.horse
+          ansible_user: dame
+          ansible_password: "{{ vault_ssh_password_archtest }}"
+          paseo_daemon_password: "{{ vault_paseo_daemon_password_archtest }}"
+          paseo_listen: "0.0.0.0:6767"
+          paseo_hostnames: ["damed"]
+        fed4090:
+          ansible_host: cmcgjdesk14gnu.netpegasus.horse
+          ansible_user: sun
+          ansible_password: "{{ vault_ssh_password_fed4090 }}"
+          paseo_daemon_password: "{{ vault_paseo_daemon_password_fed4090 }}"
+          paseo_listen: "0.0.0.0:6969"
+          paseo_hostnames: ["cmcgjdesk14gnu"]
 
         # box-b:
         #   ansible_host: 100.64.0.2

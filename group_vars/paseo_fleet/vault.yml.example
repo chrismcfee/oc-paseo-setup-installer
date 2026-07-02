@@ -19,6 +19,7 @@ paseo_opencode_secrets:
   Z_AI_WR_TOKEN: ""
   Z_AI_API_KEY: ""
   PASEO_TOKEN: ""          # the bearer the local OpenCode uses to call Paseo (== daemon password)
+  OPENSEARCH_WEB_URL: "https://searx.perennialte.ch/"   # non-secret: enables OpenCode optional web search
 
 # Optional: only if your primary provider (zai-coding-plan) authenticates via `opencode auth login`
 # rather than an {env:VAR} apiKey in opencode.jsonc. Paste that auth.json as a dict; it's deployed

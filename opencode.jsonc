@@ -7,6 +7,7 @@
     "opencode-agent-skills",
     "envsitter-guard",
     "@howaboua/opencode-planning-toolkit",
+    "@kagan-sh/opensearch",
     "opentmux"
   ],
   "model": "zai-coding-plan/glm-5.2",
@@ -15,6 +16,12 @@
   ],
   "provider": {
     "zai-coding-plan": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Z.AI Coding Plan",
+      "options": {
+        "baseURL": "https://api.z.ai/api/coding/paas/v4",
+        "apiKey": "{env:ZAI_CODING_PLAN_API_KEY}"
+      },
       "models": {
         "glm-5.2": {
           "name": "GLM-5.2 (1M)",
@@ -35,11 +42,11 @@
         "baseURL": "http://192.168.1.157:3000/openai/v1/"
       },
       "models": {
-        "FrontierCODE": {
+        "tensorzero::function_name::FrontierCODE": {
           "name": "FrontierCODE (TensorZero)",
           "tool_call": true,
           "limit": {
-            "context": 1000000,
+            "context": 750000,
             "output": 131072
           }
         }

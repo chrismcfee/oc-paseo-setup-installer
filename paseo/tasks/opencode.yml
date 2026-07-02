@@ -82,7 +82,7 @@
         owner: "{{ paseo_user }}"
         group: "{{ paseo_group }}"
         mode: "0600"
-      no_log: true
+      no_log: "{{ paseo_no_log }}"
       when: paseo_opencode_auth | length > 0
       notify: restart paseo
 

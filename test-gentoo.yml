@@ -1,0 +1,25 @@
+---
+# Localhost smoke test for the `paseo` role — installs and runs a REAL Paseo daemon on THIS machine,
+# bound to loopback (no NetBird needed) plus OpenCode, as a service. Exercises the full role,
+# including the Fedora/Arch package paths and the bcrypt password-hash write. Run from the repo root:
+#
+#     ansible-playbook test-local.yml --ask-become-pass
+#
+# Needs sudo (creates the `paseo` system user + a systemd/OpenRC service). The service is started but
+# NOT enabled on boot. Undo everything afterwards with:   ./test-local-teardown.sh
+- name: Paseo + OpenCode localhost smoke test
+  hosts: gentoo
+  become: true
+  vars:
+    paseo_listen: "cargogen2.netpegasus.horse:6767"            # loopback — no NetBird required for the test
+    paseo_after_netbird: true                # don't order after a netbird unit that isn't here
+    paseo_relay_enabled: true
+    paseo_service_enabled: true              # start now, but don't auto-start on boot
+    paseo_install_github_cli: false           # not needed to test the daemon
+    paseo_daemon_password: "installgentooinstallgentooinstallgentoo123"    # TEST ONLY — throwaway local password
+    paseo_opencode_config_src: "{{ playbook_dir }}/opencode.jsonc"
+    # No vault here, so OpenCode provider secrets aren't injected — the daemon still runs and OpenCode
+    # is installed; the {env:VAR} keys just won't resolve (fine for a smoke test). To test those too,
+    # run the real site.yml with your vault, or pass -e '{"paseo_opencode_secrets": {...}}'.
+  roles:
+    - paseo

@@ -29,8 +29,10 @@ paseo_bin: "{{ paseo_bin_dir }}/paseo"
 
 paseo_cli_package: "@getpaseo/cli"
 paseo_cli_version: ""            # pin a version e.g. "0.1.101"; empty = track latest
-# npm installs globals under <prefix>/lib/node_modules; the password step runs paseo's own
-# hashDaemonPassword() from here via `node`, so it never depends on the broken set-password prompt.
+# The password step runs paseo's own hashDaemonPassword() from inside the installed CLI package via
+# `node`, so it never depends on the broken set-password prompt. This is the common-case path; on
+# lib64 profiles (Gentoo) npm's global root is <prefix>/lib64/node_modules, so install.yml overrides
+# this fact at runtime from `npm root -g`. Leave as-is unless you skip the CLI install entirely.
 paseo_cli_pkg_dir: "{{ paseo_npm_prefix }}/lib/node_modules/{{ paseo_cli_package }}"
 
 paseo_symlink_cli: true          # symlink paseo into /usr/local/bin for admin convenience
@@ -91,6 +93,11 @@ paseo_manage_selinux: true
 # =============================================================================
 # Auth (Ansible Vault)
 # =============================================================================
+# Censor secret-bearing task output (passwords, provider keys). Flip to false ONLY when
+# debugging a failing task (-e paseo_no_log=false) — with it off, plaintext secrets land in
+# Ansible/CI logs on -v, --diff, and failures. Never commit/ship runs with it off.
+paseo_no_log: true
+
 # Set false to rely on the NetBird mesh as the sole access boundary (no daemon password).
 paseo_set_password: true
 paseo_daemon_password: ""        # REQUIRED when paseo_set_password — pull from Vault

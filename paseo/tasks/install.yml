@@ -165,6 +165,24 @@
   become_user: "{{ paseo_user }}"
   notify: restart paseo
 
+# npm's global module root is <prefix>/lib/node_modules on most distros, but <prefix>/lib64/node_modules
+# on lib64 profiles (Gentoo, some RHEL). Ask npm directly instead of assuming 'lib', so the password
+# step's chdir into the CLI package (where `import('@getpaseo/server')` resolves) works everywhere.
+- name: Resolve npm's global module root
+  ansible.builtin.command: npm root -g
+  environment:
+    HOME: "{{ paseo_home_dir }}"
+    NPM_CONFIG_PREFIX: "{{ paseo_npm_prefix }}"
+    PATH: "{{ paseo_bin_dir }}:/usr/local/bin:/usr/bin:/bin"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_npm_root_g
+  changed_when: false
+
+- name: Set the Paseo CLI package dir from npm's real global root
+  ansible.builtin.set_fact:
+    paseo_cli_pkg_dir: "{{ _paseo_npm_root_g.stdout | trim }}/{{ paseo_cli_package }}"
+
 - name: Symlink the paseo CLI into /usr/local/bin
   ansible.builtin.file:
     src: "{{ paseo_bin }}"
