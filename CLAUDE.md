@@ -8,6 +8,17 @@ Read `AGENTS.md` too — its secrets/safety rules, Ansible conventions, and vali
 
 Ansible automation that deploys a fleet of [Paseo](https://getpaseo.com) daemons plus the [OpenCode](https://opencode.ai) CLI they launch, reachable over a NetBird mesh, on systemd **or** OpenRC (auto-detected per host) across Gentoo, Debian/Ubuntu, Fedora/RHEL, and Arch. There is no package manager, build step, unit-test suite, linter, or formatter — validation is Ansible syntax checks, shell/Python compile checks, and the smoke-test playbooks below.
 
+## Claude → Codex orchestration (Pattern A)
+
+This repo includes a portable Claude-orchestrates / Codex-implements kit:
+
+- Short pointer: [`.claude/README-codex-orchestration.md`](.claude/README-codex-orchestration.md)
+- Full guide: [`docs/guides/CLAUDE_CODEX_ORCHESTRATION.md`](docs/guides/CLAUDE_CODEX_ORCHESTRATION.md)
+- Skills: `/codex-impl` (one feature), `/features-parallel` (many)
+- Scripts: `.claude/scripts/feature-worktree.sh`, `feature-status.sh`, `.claude/skills/codex-impl/scripts/run-codex.sh`
+
+Main checkout stays put; features run in `.worktrees/<slug>` on `feat/<slug>`. Prefer `ansible-playbook --syntax-check` / `sh -n` / `py_compile` for verify — not heavy debug builds.
+
 ## Commands
 
 All commands run from the repo root (`ansible.cfg` sets `roles_path = .`, `inventory = inventory.yml`, `vault_password_file = ./vault-pass.sh`).

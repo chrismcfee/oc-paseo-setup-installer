@@ -39,3 +39,8 @@ auth.json
 *.retry
 *~
 .DS_Store
+
+# --- Claude → Codex orchestration (Pattern A) ---
+.worktrees/
+**/.codex-runs/
+**/.codex-prompt.md
