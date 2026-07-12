@@ -1,4 +1,14 @@
-# oc-paseo-setup-installer
+# README
+
+Opinionated reproducible dev environments extendable via ansible playbooks
+
+(Original name was opencode-paseo installer)
+
+adding support in for editors such as neovim, lsp servers, and alternatives for all kinds of dev environments to make reproducible dev environments a little less manual.
+
+## Old readme:
+
+#### oc-paseo-setup-installer
 
 Ansible automation that stands up a fleet of [**Paseo**](https://getpaseo.com) daemons and the
 [**OpenCode**](https://opencode.ai) CLI they drive — installed, configured, secured, and reachable
@@ -16,7 +26,7 @@ runs across the whole fleet without two daemons ever sharing an identity.
 
 ---
 
-## What it does
+############ What it does
 
 1. Creates a hardened system `paseo` user (home under `/var/lib/paseo`).
 2. Installs Node (≥22, version-gated) and the Paseo CLI into a per-user npm prefix.
@@ -50,7 +60,7 @@ runs across the whole fleet without two daemons ever sharing an identity.
                         └───────────────────────────────────────────────────────────────┘
 ```
 
-## Repository layout
+############# Repository layout
 
 ```
 .
@@ -79,7 +89,7 @@ runs across the whole fleet without two daemons ever sharing an identity.
 └── ansible-role-paseo.tar.gz      ← packaged snapshot of the role/
 ```
 
-## Requirements
+## #Requirements
 
 **Controller (your workstation):**
 - Ansible ≥ 2.14 and the `community.general` collection:
