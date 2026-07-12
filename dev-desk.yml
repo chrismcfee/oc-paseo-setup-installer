@@ -16,7 +16,7 @@
     paseo_relay_enabled: true
     paseo_service_enabled: true              # start now, but don't auto-start on boot
     paseo_install_github_cli: false           # not needed to test the daemon
-    paseo_daemon_password: "TEST DESKTOP PASSWORD"    # TEST ONLY — throwaway local password
+    paseo_daemon_password: "change-me"    # TEST ONLY — placeholder, not a real password
     paseo_opencode_config_src: "{{ playbook_dir }}/opencode.jsonc"
     # No vault here, so OpenCode provider secrets aren't injected — the daemon still runs and OpenCode
     # is installed; the {env:VAR} keys just won't resolve (fine for a smoke test). To test those too,

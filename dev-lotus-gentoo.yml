@@ -8,10 +8,10 @@
 # Needs sudo (creates the `paseo` system user + a systemd/OpenRC service). The service is started but
 # NOT enabled on boot. Undo everything afterwards with:   ./test-local-teardown.sh
 - name: Paseo + OpenCode localhost smoke test
-  hosts: archtest
+  hosts: lotus
   become: true
   vars:
-    paseo_listen: "damed.netpegasus.horse:6767"            # loopback — no NetBird required for the test
+    paseo_listen: "0.0.0.0:6767"            # loopback — no NetBird required for the test
     paseo_after_netbird: true                # don't order after a netbird unit that isn't here
     paseo_relay_enabled: true
     paseo_service_enabled: true              # start now, but don't auto-start on boot
