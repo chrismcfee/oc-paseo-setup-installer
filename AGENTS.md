@@ -21,7 +21,7 @@ The key invariant: the role templates configuration and service units, but not d
 - `redact-json.py` / `opencode-effective-config.py` — helper scripts for safe config inspection.
 - `paseo/` — the Ansible role. Important subdirs:
   - `paseo/defaults/main.yml` — authoritative defaults and comments for role variables.
-  - `paseo/tasks/` — install, password, config, service, OpenCode, and fetch tasks.
+  - `paseo/tasks/` — install, password, config, service, OpenCode, Claude Code, and fetch tasks.
   - `paseo/templates/` — systemd/OpenRC/env templates.
   - `paseo/files/` — standalone helper scripts deployed/used by the role.
   - `paseo/example/` — library-style example topology.
@@ -80,14 +80,16 @@ There is no package manager, build step, unit-test suite, linter config, or form
 - Keep `paseo_listen` per host on the NetBird mesh IP by default. Avoid switching to `0.0.0.0` without calling out the security implications.
 - The role should manage `config.json` and service files, not daemon identity state.
 - The daemon password is written as a bcrypt hash through Paseo’s own hashing code; do not replace this with `paseo daemon set-password` automation. That command is documented here as an interactive TTY prompt and not suitable for noninteractive Ansible.
-- Do not hand-add unverified keys to daemon `config.json`; the Paseo schema is strict.
+- Do not hand-add unverified keys to daemon `config.json`; the Paseo schema is strict at the root and under `daemon` (unknown keys are rejected). Keys under `agents.providers.<id>` are stripped rather than rejected, but still keep additions minimal and verified.
+- `claude` is an opt-in second agent (`paseo_install_claude`, default false). Its tasks must stay gated, and `claude.yml` must run after `config.yml` because it merges into the same `config.json`.
 
 ## Paseo/OpenCode gotchas
 
 - Node >= 22 is required for the Paseo CLI. The role defaults to `paseo_min_node_major: 22` and version-gates even when `paseo_manage_node: false`.
 - `paseo daemon start --foreground` is the verified supervision mode. The systemd unit needs the daemon in the foreground so restart behavior supervises the real worker.
 - NetBird is not installed or managed by this role; services are only ordered after it.
-- The service PATH intentionally includes the OpenCode install dir and Paseo npm prefix so Paseo can spawn `opencode`.
+- The service PATH intentionally includes each enabled agent's install dir and the Paseo npm prefix so Paseo can spawn `opencode`/`claude`. Build it from the `paseo_agent_path_dirs` list and keep the `reject('eq','')` filter: a disabled agent must not leave an empty `::` element, because an empty PATH element means the current directory.
+- Agent-provider availability is decided by `which -a <cli>` run inside the daemon process, so only the daemon's own PATH matters. Setting a PATH in `agents.providers.<id>.env` does not affect discovery. Availability also ignores auth, so "ready" does not mean the credential works.
 - With `ProtectHome=true`, the default `paseo_home_dir` under `/var/lib/paseo` is intentional. If switching to a login user under `/home`, set `paseo_systemd_protect_home: false`.
 - Paseo may auto-inject its own MCP into launched agents. A manual `mcp.paseo` block in `opencode.jsonc` is often redundant; check `README.md` and `paseo/README.md` before changing this behavior.
 - If a manual MCP block points at `127.0.0.1:6767` while the daemon binds only a mesh IP, the launched OpenCode cannot reach it over loopback. Use a mesh URL per host or bind appropriately with password/firewall boundaries.

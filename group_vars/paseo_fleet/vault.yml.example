@@ -28,3 +28,15 @@ paseo_opencode_secrets:
 #   zai-coding-plan:
 #     type: "api"
 #     key: "..."
+
+# Optional: Claude Code credentials, only when paseo_install_claude is true. Merged with
+# paseo_opencode_secrets into the SAME /etc/paseo/paseo.env, so key names must not collide.
+# paseo_claude_secrets:
+#   ANTHROPIC_API_KEY: ""
+#
+# For a gateway instead of a direct Anthropic key, use these two rather than ANTHROPIC_API_KEY.
+# The endpoint must speak the Anthropic Messages API (POST /v1/messages) — an OpenAI-compatible
+# endpoint (Z.AI's, TensorZero's) needs a translating proxy in front of it.
+# paseo_claude_secrets:
+#   ANTHROPIC_BASE_URL: "http://127.0.0.1:4000"
+#   ANTHROPIC_AUTH_TOKEN: ""

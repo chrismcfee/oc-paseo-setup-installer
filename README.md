@@ -81,7 +81,7 @@ runs across the whole fleet without two daemons ever sharing an identity.
 ├── paseo/                         ← the Ansible role (homelab.paseo)
 │   ├── README.md                  ← role reference: full variable list + internals
 │   ├── defaults/main.yml          ← every tunable, commented
-│   ├── tasks/                     ← install, opencode_install, password, config, service, …
+│   ├── tasks/                     ← install, opencode_install, claude_install, password, config, …
 │   ├── templates/                 ← paseo.service.j2, paseo.openrc.j2, paseo.conf.d.j2, paseo.env.j2
 │   ├── files/                     ← resolve-opencode-config.sh + helper scripts
 │   └── example/                   ← library-style example (drive the role directly)
@@ -161,8 +161,27 @@ Set on the play, in `inventory.yml`, or per host. Full list in [`paseo/README.md
 | `paseo_deploy_opencode_config` | `true` | Deploy your sanitized `opencode.jsonc`. |
 | `paseo_opencode_secrets` | `{}` | `{env:VAR}` → value map, from Vault. |
 | `paseo_opencode_auth` | `{}` | Optional `auth.json` (Vault) for `opencode auth login` providers. |
+| `paseo_install_claude` | `false` | Opt-in: install Claude Code and register it as a Paseo provider. |
+| `paseo_claude_version` | `stable` | `stable` / `latest` / exact semver. Pin exactly for a fleet. |
+| `paseo_claude_secrets` | `{}` | `ANTHROPIC_API_KEY` etc., from Vault. Same env file as OpenCode's. |
 | `paseo_relay_enabled` | `false` | Paseo's hosted relay; off for mesh-only fleets. |
 | `paseo_manage_node` | `true` | `false` if you provide Node ≥22 yourself. |
+
+### Running Claude Code instead of (or alongside) OpenCode
+
+`claude` is a builtin Paseo provider, so this is an install-and-register job, not an integration:
+
+```yaml
+paseo_install_claude: true
+paseo_claude_version: "2.1.212"
+paseo_claude_secrets:
+  ANTHROPIC_API_KEY: "{{ vault_anthropic_api_key }}"
+```
+
+Both agents can be installed at once — each gets its own bin dir on the daemon's PATH, and their
+secrets are merged into the one `/etc/paseo/paseo.env`. Details, including why PATH is the only
+discovery lever that matters and what "available" does and doesn't guarantee, are in
+[`paseo/README.md`](paseo/README.md#claude-code-as-a-second-agent).
 
 ## Secrets & Vault
 

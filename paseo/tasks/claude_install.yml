@@ -1,0 +1,163 @@
+---
+# Install the Claude Code CLI for paseo_user via Anthropic's native installer. The result is a
+# self-contained ELF binary (glibc >= 2.17, ripgrep embedded, no Node at runtime) at
+# ~/.local/share/claude/versions/<version>, with ~/.local/bin/claude as a symlink to it.
+#
+# Idempotency reads the SYMLINK, not the binary: `readlink -e` resolves it and fails on a dangling
+# target, giving us the installed version without paying a ~260 MB cold start on every play. The
+# alternative (`claude --version`) execs the binary each run for the same answer.
+#
+# Two install paths, deliberately: the curl bootstrap ALWAYS downloads `latest` first and only then
+# fetches the pin, so a pinned first install costs two full downloads. Once a binary exists,
+# `claude install <target>` is the same step the bootstrap ends up calling — one download.
+
+- name: Ensure curl + ca-certificates are present (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - bash
+      - curl
+      - ca-certificates
+      - coreutils
+    state: present
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+
+- name: Ensure curl is present (Gentoo)
+  community.general.portage:
+    package: net-misc/curl
+    state: present
+  when: ansible_os_family == 'Gentoo'
+
+- name: Ensure curl + coreutils are present (Fedora/RHEL)
+  ansible.builtin.package:
+    name:
+      - bash
+      - curl
+      - coreutils
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Ensure curl + coreutils are present (Arch)
+  community.general.pacman:
+    name:
+      - bash
+      - curl
+      - coreutils
+    state: present
+  when: ansible_os_family == 'Archlinux'
+
+# The installer writes into ~/.local/{bin,share,state} and ~/.cache; create the home now so a
+# fresh dedicated user (whose home may only have been made by useradd) has the right ownership
+# rather than whatever the installer's umask produces.
+- name: Ensure the Claude install parent dirs exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0755"
+  loop:
+    - "{{ paseo_claude_bin_dir }}"
+    - "{{ paseo_claude_install_dir }}"
+
+# `readlink -e` resolves the launcher AND requires the target to exist, so a dangling symlink left
+# by a half-finished install reports rc != 0 rather than a false-positive version. basename of the
+# target is the version, because the installer names each version file after its version.
+- name: Read the installed Claude Code version from the launcher symlink
+  ansible.builtin.command: "readlink -e {{ paseo_claude_installed_bin }}"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_cc_link
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether Claude Code must be (re)installed
+  ansible.builtin.set_fact:
+    # A channel pin ("stable"/"latest") can't be compared to an installed semver, so we only
+    # version-match on an exact pin — otherwise a channel would reinstall on every play.
+    _paseo_cc_installed_version: "{{ (_paseo_cc_link.stdout | trim | basename) if _paseo_cc_link.rc == 0 else '' }}"
+    _paseo_cc_pin_is_exact: "{{ paseo_claude_version is match('^[0-9]+\\.[0-9]+\\.[0-9]+') }}"
+
+- name: Decide the install action
+  ansible.builtin.set_fact:
+    _paseo_cc_install_needed: >-
+      {{ (_paseo_cc_installed_version | length == 0)
+         or (paseo_claude_upgrade | bool)
+         or (_paseo_cc_pin_is_exact | bool
+             and _paseo_cc_installed_version != paseo_claude_version) }}
+
+# First install only. `set -o pipefail` so a curl failure (bad pin -> 404) fails the task instead of
+# being masked by bash's exit status. CLAUDE_INSTALL_ALLOW_SUDO: the script aborts when it sees
+# SUDO_USER set to a non-root user, to stop a sudo'ing user from installing into root's home. We set
+# HOME explicitly, which is the exact hazard that guard protects against, and Ansible's become chain
+# can legitimately leave SUDO_USER as the connecting user.
+- name: Bootstrap Claude Code (native installer)
+  ansible.builtin.shell:
+    cmd: "set -o pipefail; curl -fsSL {{ paseo_claude_install_url }} | bash -s {{ paseo_claude_version | quote }}"
+  args:
+    executable: /bin/bash
+  environment:
+    HOME: "{{ paseo_home_dir }}"
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+    CLAUDE_INSTALL_ALLOW_SUDO: "1"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_cc_bootstrap
+  changed_when: _paseo_cc_bootstrap.rc == 0
+  when:
+    - _paseo_cc_install_needed | bool
+    - _paseo_cc_installed_version | length == 0
+  notify: restart paseo
+
+# Re-pin path: a binary already exists, so skip the bootstrap's redundant `latest` download and use
+# the installer subcommand directly. This is the same step the bootstrap script itself execs.
+- name: Re-pin Claude Code to {{ paseo_claude_version }}
+  ansible.builtin.command:
+    argv:
+      - "{{ paseo_claude_installed_bin }}"
+      - install
+      - "{{ paseo_claude_version }}"
+  environment:
+    HOME: "{{ paseo_home_dir }}"
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_cc_repin
+  changed_when: _paseo_cc_repin.rc == 0
+  when:
+    - _paseo_cc_install_needed | bool
+    - _paseo_cc_installed_version | length > 0
+  notify: restart paseo
+
+- name: Verify the Claude Code launcher resolves
+  ansible.builtin.stat:
+    path: "{{ paseo_claude_installed_bin }}"
+    follow: true
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_cc_bin_stat
+
+# Skipped under --check: the install tasks above are no-ops in check mode, so on a host that
+# doesn't have Claude Code yet this would fail the dry run rather than report the intended change.
+- name: Assert Claude Code installed
+  ansible.builtin.assert:
+    that:
+      - _paseo_cc_bin_stat.stat.exists
+      - _paseo_cc_bin_stat.stat.executable | default(false)
+    fail_msg: >-
+      Claude Code binary not resolvable via {{ paseo_claude_installed_bin }} after install. The
+      installer needs bash, curl (or wget), sha256sum, ~512 MB free RAM and outbound HTTPS to
+      downloads.claude.ai; it also exits 137 when OOM-killed. Check a pinned
+      paseo_claude_version actually exists, or re-run with -e paseo_no_log=false for the output.
+    quiet: true
+  when: not ansible_check_mode
+
+# Belt-and-suspenders alongside paseo_service_path, matching what opencode_install.yml does. A
+# distinct dest from the opencode symlink — never share one.
+- name: Symlink the Claude Code launcher into /usr/local/bin
+  ansible.builtin.file:
+    src: "{{ paseo_claude_installed_bin }}"
+    dest: /usr/local/bin/claude
+    state: link
+    force: true
+  when: paseo_claude_symlink | bool

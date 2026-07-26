@@ -26,6 +26,13 @@ host_vars/*/vault.yaml
 .env.*
 auth.json
 
+# --- Raw Claude Code credentials/state that must never be copied into the repo ---
+# .credentials.json is written only by `claude /login`; it holds a short-lived OAuth access
+# token plus a refresh token. It is never a provisioning input — the role uses vault-held
+# ANTHROPIC_* vars instead — so its presence here means someone copied it off a host.
+.credentials.json
+.claude.json
+
 # --- Artifacts fetched back from hosts (configs / redacted hashes) ---
 /fetched-opencode/
 /fetched-daemon-config/

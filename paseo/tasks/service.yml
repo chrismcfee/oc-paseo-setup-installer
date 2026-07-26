@@ -1,8 +1,18 @@
 ---
-# Daemon environment file (OpenCode provider secrets, etc.), loaded by BOTH init systems: systemd
+# Daemon environment file (agent provider secrets, etc.), loaded by BOTH init systems: systemd
 # via EnvironmentFile=, OpenRC by sourcing it in the service script. Written before the units that
 # reference it. root:paseo 0640 — the daemon reads it, the world cannot. Units tolerate its absence,
 # so it's only created when there are secrets to write.
+#
+# ONE file for ALL agents. There is exactly one EnvironmentFile= / one sourced file, and Ansible
+# dicts don't merge across var files, so the two per-agent dicts are unioned HERE rather than each
+# feeding its own file. Gating on the union matters: gating on the OpenCode dict alone would leave
+# a Claude-only host with no env file, and ANTHROPIC_API_KEY would silently never reach the daemon.
+- name: Compose the union of agent secrets
+  ansible.builtin.set_fact:
+    _paseo_agent_secrets: "{{ paseo_opencode_secrets | combine(paseo_claude_secrets) }}"
+  no_log: "{{ paseo_no_log }}"
+
 - name: Ensure the env-file directory exists
   ansible.builtin.file:
     path: "{{ paseo_env_file | dirname }}"
@@ -10,7 +20,7 @@
     owner: root
     group: "{{ paseo_group }}"
     mode: "0750"
-  when: paseo_opencode_secrets | length > 0
+  when: _paseo_agent_secrets | length > 0
 
 - name: Write the daemon environment file
   ansible.builtin.template:
@@ -20,7 +30,7 @@
     group: "{{ paseo_group }}"
     mode: "0640"
   no_log: true
-  when: paseo_opencode_secrets | length > 0
+  when: _paseo_agent_secrets | length > 0
   notify: restart paseo
 
 - name: Install systemd unit

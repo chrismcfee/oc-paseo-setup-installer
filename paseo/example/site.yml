@@ -13,5 +13,8 @@
     # no opencode.jsonc on the controller.
     paseo_install_opencode: false
     paseo_deploy_opencode_config: false
+    # Claude Code is opt-in (already false by default); stated explicitly so this example stays a
+    # daemon-only provision even if that default ever changes.
+    paseo_install_claude: false
   roles:
     - paseo

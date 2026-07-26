@@ -1,0 +1,197 @@
+---
+# Configure Claude Code for the daemon user and register it with Paseo.
+#
+# Three independent pieces:
+#  1. ~/.claude/settings.json  — role-owned outright (the installer never creates it, so there is
+#     nothing to merge against). Paseo's Claude provider loads settingSources ["user","project",
+#     "local"], so THIS is the "user" scope the spawned agent reads — the daemon user's home
+#     (/var/lib/paseo), never the operator's.
+#  2. ~/.claude.json           — installer-owned STATE (machineID, update bookkeeping). We merge a
+#     single onboarding flag into it and must never overwrite the file.
+#  3. config.json              — pin the absolute binary path so provider resolution can't depend
+#     on PATH. Deep-merged like every other key the role owns.
+
+- name: Ensure the Claude config dir exists
+  ansible.builtin.file:
+    path: "{{ paseo_claude_settings_dest | dirname }}"
+    state: directory
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0700"
+  when: paseo_deploy_claude_settings | bool
+
+# 0600 and no_log: an `env` block here can legitimately carry ANTHROPIC_API_KEY (a settings-file
+# env entry outranks the same variable from the shell), so treat the whole file as secret-bearing.
+- name: Deploy Claude Code settings.json
+  ansible.builtin.copy:
+    content: "{{ paseo_claude_settings | combine(paseo_claude_settings_extra, recursive=True) | to_nice_json }}\n"
+    dest: "{{ paseo_claude_settings_dest }}"
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0600"
+  no_log: "{{ paseo_no_log }}"
+  when: paseo_deploy_claude_settings | bool
+  notify: restart paseo
+
+# --- onboarding gate --------------------------------------------------------------------------
+# A fresh HOME shows a first-run wizard that blocks non-interactive use. The flag that records it
+# past is `hasCompletedOnboarding` in ~/.claude.json — UNDOCUMENTED internal state, so this is a
+# compatibility bet, not a supported interface. Read-modify-write (never template the file): the
+# installer also keeps machineID and update bookkeeping there.
+- name: Read existing Claude Code state file
+  ansible.builtin.slurp:
+    src: "{{ paseo_home_dir }}/.claude.json"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_cc_state_raw
+  failed_when: false
+  when: paseo_seed_claude_onboarding | bool
+
+- name: Seed the onboarding flag into ~/.claude.json
+  ansible.builtin.copy:
+    content: >-
+      {{ ((_paseo_cc_state_raw.content | b64decode | from_json)
+            if (_paseo_cc_state_raw.content is defined
+                and (_paseo_cc_state_raw.content | length) > 0)
+            else {})
+         | combine({'hasCompletedOnboarding': true}, recursive=True)
+         | to_nice_json }}
+    dest: "{{ paseo_home_dir }}/.claude.json"
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0600"
+  when:
+    - paseo_seed_claude_onboarding | bool
+    # Only write when the flag isn't already true, so we don't churn the file (and restart the
+    # daemon) on every play.
+    - not (((_paseo_cc_state_raw.content | default('') | b64decode | from_json)
+            if (_paseo_cc_state_raw.content is defined
+                and (_paseo_cc_state_raw.content | length) > 0)
+            else {}).get('hasCompletedOnboarding', false))
+
+# --- Paseo provider registration ----------------------------------------------------------------
+# `agents.providers.claude.command` is an array validated by ProviderOverrideSchema. An array here
+# takes the override branch of the daemon's resolveProviderLaunch, which checks the path literally
+# instead of searching PATH. Deliberately the ONLY key we set: the provider is already enabled by
+# default, and config.json is strict-schema — every extra key is a way to break daemon startup.
+- name: Read existing daemon config (for the provider merge)
+  ansible.builtin.slurp:
+    src: "{{ paseo_state_dir }}/config.json"
+  register: _paseo_cc_cfg_raw
+  failed_when: false
+  when: paseo_register_claude_provider | bool
+
+- name: Register Claude Code with Paseo (agents.providers.claude)
+  ansible.builtin.copy:
+    content: >-
+      {{ ((_paseo_cc_cfg_raw.content | b64decode | from_json)
+            if (_paseo_cc_cfg_raw.content is defined
+                and (_paseo_cc_cfg_raw.content | length) > 0)
+            else {})
+         | combine({'agents': {'providers': {'claude':
+             {'command': [paseo_claude_installed_bin]}}}}, recursive=True)
+         | to_nice_json }}
+    dest: "{{ paseo_state_dir }}/config.json"
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0600"
+  when: paseo_register_claude_provider | bool
+  notify: restart paseo
+
+# --- credential preflight (reports, never fails) ------------------------------------------------
+# Paseo's availability probe only looks for the binary, so a dead key provisions green and fails at
+# the first prompt. This closes that gap without making provisioning brittle.
+#
+# Which header: ANTHROPIC_AUTH_TOKEN goes out as `Authorization: Bearer` and outranks
+# ANTHROPIC_API_KEY, which goes out as `x-api-key`. We mirror that precedence so we test the
+# credential the CLI will actually use. A base URL override is honored, so this tests the gateway
+# rather than api.anthropic.com when one is configured.
+- name: Select the credential to preflight
+  ansible.builtin.set_fact:
+    _paseo_cc_base: "{{ paseo_claude_secrets.get('ANTHROPIC_BASE_URL', 'https://api.anthropic.com') | regex_replace('/+$', '') }}"
+    _paseo_cc_bearer: "{{ paseo_claude_secrets.get('ANTHROPIC_AUTH_TOKEN', '') }}"
+    _paseo_cc_apikey: "{{ paseo_claude_secrets.get('ANTHROPIC_API_KEY', '') }}"
+  no_log: "{{ paseo_no_log }}"
+  when: paseo_verify_claude_credential | bool
+
+# curl, not ansible.builtin.uri, for three reasons found by testing:
+#  - uri aborts with status -1 before sending anything if the target has a too-permissive ~/.netrc,
+#    which would silently downgrade every probe to "could not verify";
+#  - curl is already a hard dependency this role installs, so there's no new requirement;
+#  - `--config -` reads the header from STDIN, keeping the credential out of argv and therefore out
+#    of the process table on a shared host. (-w writes only the status code to stdout.)
+#
+# check_mode: false — read-only probe, and a dry run is exactly when catching a stale key is most
+# useful. max_tokens 1 keeps the cost negligible.
+- name: Preflight the Claude credential (non-fatal)
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --max-time
+      - "20"
+      - --config
+      - "-"
+    stdin: |
+      url = "{{ _paseo_cc_base }}/v1/messages"
+      request = "POST"
+      header = "content-type: application/json"
+      header = "anthropic-version: 2023-06-01"
+      header = "{{ 'authorization: Bearer ' ~ _paseo_cc_bearer if _paseo_cc_bearer | length > 0 else 'x-api-key: ' ~ _paseo_cc_apikey }}"
+      data = "{\"model\":\"{{ paseo_claude_preflight_model }}\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\".\"}]}"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_cc_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: "{{ paseo_no_log }}"
+  when:
+    - paseo_verify_claude_credential | bool
+    - (_paseo_cc_bearer | length > 0) or (_paseo_cc_apikey | length > 0)
+
+# curl writes the HTTP status to stdout; 000 means it never got a response (DNS, refused, timeout).
+- name: Interpret the preflight status
+  ansible.builtin.set_fact:
+    _paseo_cc_status: "{{ (_paseo_cc_probe.stdout | default('') | trim) if not (_paseo_cc_probe is skipped) else '' }}"
+  when: paseo_verify_claude_credential | bool
+
+# 401 is the only definitive "this credential is bad" signal. 403 means authenticated but not
+# permitted; 404 means the model name is wrong, not the key; 400 means our probe body was rejected.
+# Treating those as failures would produce false alarms every time Anthropic retires a model name.
+- name: Report the credential preflight result
+  ansible.builtin.debug:
+    msg: >-
+      {% if _paseo_cc_status == '200' %}
+      Claude credential OK (HTTP 200 from {{ _paseo_cc_base }}).
+      {% elif _paseo_cc_status == '401' %}
+      *** Claude credential REJECTED (HTTP 401) by {{ _paseo_cc_base }}. Claude Code is installed
+      and Paseo will report it available — availability does not check auth — but every prompt will
+      fail until the key in paseo_claude_secrets is fixed. Continuing anyway.
+      {% elif _paseo_cc_status == '000' %}
+      Could not reach {{ _paseo_cc_base }} from this host (no response: DNS, refused, or timeout).
+      The credential itself was never tested — this says nothing about whether the key is valid.
+      {% else %}
+      Could not verify the Claude credential (HTTP {{ _paseo_cc_status | default('?') }}).
+      This is NOT evidence the key is bad — 403 means authenticated but not permitted, 404 means the
+      probe model name is retired, 400 means the probe body was rejected. Check by hand with:
+      sudo -u {{ paseo_user }} {{ paseo_claude_installed_bin }} auth status
+      {% endif %}
+  when:
+    - paseo_verify_claude_credential | bool
+    - not (_paseo_cc_probe is skipped)
+
+- name: Note when no credential was supplied at all
+  ansible.builtin.debug:
+    msg: >-
+      No ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in paseo_claude_secrets, so nothing to preflight.
+      Claude Code is installed and will report available, but prompts will fail until a credential
+      reaches {{ paseo_env_file }}.
+  when:
+    - paseo_verify_claude_credential | bool
+    - _paseo_cc_probe is skipped

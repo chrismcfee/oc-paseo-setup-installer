@@ -1,30 +1,41 @@
 ---
 # On SELinux-enforcing RedHat/Fedora, a systemd service (init_t) may NOT execute files labeled
-# var_lib_t — which is what npm and the OpenCode installer leave under /var/lib/paseo. Without this,
+# var_lib_t — which is what npm and the agent installers leave under /var/lib/paseo. Without this,
 # `paseo daemon start` dies with 203/EXEC ("Permission denied") and the unit crash-loops, and the
-# OpenCode it later launches would be blocked too. We label the Paseo CLI prefix and the OpenCode
+# agent CLI it later launches would be blocked too. We label the Paseo CLI prefix and each agent
 # binary as bin_t (persistently, so it survives a filesystem relabel) and apply it now.
+#
+# The agent targets are built as a list and filtered, so only enabled agents are labeled — and the
+# restorecon command below can't end up with an empty path argument.
 
 - name: Ensure semanage is available (persistent SELinux file contexts)
   ansible.builtin.package:
     name: policycoreutils-python-utils
     state: present
 
-- name: Label the Paseo CLI prefix and OpenCode binary as bin_t
+- name: Compose the SELinux relabel targets
+  ansible.builtin.set_fact:
+    # Whole npm prefix: the daemon never writes here at runtime, and the exec'd CLI shims live under it.
+    _paseo_selinux_dirs: >-
+      {{ ([paseo_npm_prefix]
+          + ([paseo_opencode_install_dir ~ '/bin'] if paseo_install_opencode | bool else [])
+          + ([paseo_claude_bin_dir, paseo_claude_install_dir] if paseo_install_claude | bool else [])) }}
+
+# Only each agent's bin/ (the launched binary) — the rest of the agent's tree stays writable
+# (var_lib_t). Claude Code is the exception: its launcher is a symlink into
+# ~/.local/share/claude/versions/, and SELinux resolves the TARGET's label on exec, so the version
+# store needs bin_t too or the exec is denied despite a correctly-labeled symlink.
+- name: Label the Paseo CLI prefix and agent binaries as bin_t
   community.general.sefcontext:
-    target: "{{ item }}"
+    target: "{{ item }}(/.*)?"
     setype: bin_t
     state: present
-  loop:
-    # Whole npm prefix: the daemon never writes here at runtime, and the exec'd CLI shims live under it.
-    - "{{ paseo_npm_prefix }}(/.*)?"
-    # Only OpenCode's bin/ (the launched binary) — the rest of ~/.opencode stays writable (var_lib_t).
-    - "{{ paseo_opencode_install_dir }}/bin(/.*)?"
+  loop: "{{ _paseo_selinux_dirs }}"
   notify: restart paseo
 
 - name: Apply the new SELinux labels now
   ansible.builtin.command:
-    cmd: "restorecon -RFv {{ paseo_npm_prefix }} {{ paseo_opencode_install_dir }}"
+    cmd: "restorecon -RFv {{ _paseo_selinux_dirs | join(' ') }}"
   register: _paseo_restorecon
   changed_when: (_paseo_restorecon.stdout | default('') | length) > 0
   notify: restart paseo

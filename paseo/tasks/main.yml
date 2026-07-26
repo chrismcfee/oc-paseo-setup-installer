@@ -24,6 +24,10 @@
   ansible.builtin.import_tasks: opencode_install.yml
   when: paseo_install_opencode | bool
 
+- name: Install the Claude Code CLI
+  ansible.builtin.import_tasks: claude_install.yml
+  when: paseo_install_claude | bool
+
 - name: Manage the daemon password
   ansible.builtin.import_tasks: password.yml
   when: paseo_set_password | bool
@@ -39,6 +43,16 @@
     or (paseo_manage_opencode_mcp | bool)
     or (paseo_fetch_opencode_config | bool)
     or (paseo_print_opencode_config | bool)
+
+# Must run AFTER config.yml: it deep-merges agents.providers.claude into the same config.json that
+# config.yml writes, and the config.yml write would otherwise drop the registration.
+- name: Configure Claude Code and register it with Paseo
+  ansible.builtin.import_tasks: claude.yml
+  when:
+    - paseo_install_claude | bool
+    - (paseo_deploy_claude_settings | bool)
+      or (paseo_seed_claude_onboarding | bool)
+      or (paseo_register_claude_provider | bool)
 
 - name: Grab the daemon config back to the controller
   ansible.builtin.import_tasks: fetch_daemon_config.yml

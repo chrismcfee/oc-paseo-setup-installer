@@ -41,9 +41,19 @@ paseo_symlink_cli: true          # symlink paseo into /usr/local/bin for admin c
 # into /usr/local/bin is the belt-and-suspenders fix. Point this at your opencode binary.
 paseo_opencode_bin: ""           # e.g. /usr/bin/opencode — empty = skip the symlink
 
-# PATH the daemon runs with. The OpenCode install dir + npm prefix bin come first so the agent
-# CLI Paseo launches (opencode) is found (runbook §9 "can't find binary"). REVIEW FIX.
-paseo_service_path: "{{ paseo_opencode_install_dir }}/bin:{{ paseo_bin_dir }}:/usr/local/bin:/usr/bin:/bin"
+# PATH the daemon runs with. Agent-CLI bin dirs come FIRST so the CLI Paseo launches is found
+# (runbook §9 "can't find binary"). This is the ONLY discovery lever for provider availability:
+# Paseo resolves a provider by running `which -a <cli>` inside the daemon process, so a CLI that
+# isn't on THIS path reports "unavailable" no matter what config.json says.
+#
+# Built from a list and joined, not hand-concatenated: `reject('eq','')` drops disabled agents so
+# an off Claude/OpenCode install can never leave an empty `::` element — an empty PATH element
+# means the CURRENT DIRECTORY, which for a root-installed unit is a real privilege problem.
+paseo_agent_path_dirs:
+  - "{{ (paseo_opencode_install_dir ~ '/bin') if paseo_install_opencode | bool else '' }}"
+  - "{{ paseo_claude_bin_dir if paseo_install_claude | bool else '' }}"
+  - "{{ paseo_bin_dir }}"
+paseo_service_path: "{{ (paseo_agent_path_dirs | reject('eq', '') | join(':')) ~ ':/usr/local/bin:/usr/bin:/bin' }}"
 
 # =============================================================================
 # Network / bind (NetBird mesh) — OVERRIDE PER HOST
@@ -178,6 +188,88 @@ paseo_opencode_config_fetch_dir: "./fetched-opencode"
 # global+project+OPENCODE_CONFIG merge from the files (an approximation — see README).
 paseo_print_opencode_config: false
 paseo_print_opencode_config_raw: false        # default redacts secrets; true keeps them
+
+# =============================================================================
+# Claude Code: install + register as a Paseo agent provider — dedicated-user mode
+# =============================================================================
+# `claude` is a FIRST-CLASS BUILTIN provider in Paseo (alongside codex/copilot/opencode/pi/omp),
+# driven through @anthropic-ai/claude-agent-sdk. Nothing needs to be added to config.json for
+# Paseo to offer it — but the daemon only reports it "available" if the binary is findable, so
+# these tasks install it, put it on the daemon's PATH, and pin its absolute path in config.json.
+# Off by default: enabling it downloads a ~260 MB binary per host.
+paseo_install_claude: false
+paseo_deploy_claude_settings: true          # deploy ~/.claude/settings.json (needs install)
+
+# --- install (Anthropic's native installer: curl | bash) ---------------------------------------
+# Self-contained ELF binary (glibc >= 2.17), no Node at runtime, ripgrep embedded. Needs bash +
+# (curl or wget) + sha256sum on the target, outbound HTTPS, and ~512 MB free RAM to install.
+# Anthropic ships signed apt/dnf/apk repos too, but not for Gentoo or Arch — the native installer
+# is the only uniform path across all four families this role supports.
+paseo_claude_install_url: "https://claude.ai/install.sh"
+# Pin an exact version e.g. "2.1.212", or a channel: "stable" / "latest". Pinning is STRONGLY
+# preferred for a fleet — `latest` means two hosts provisioned a day apart run different builds.
+paseo_claude_version: "stable"
+paseo_claude_upgrade: false                 # re-pin every play even when already at a good version
+# Installer layout is hardcoded to the user's home; it is not configurable via a flag.
+paseo_claude_install_dir: "{{ paseo_home_dir }}/.local/share/claude"
+paseo_claude_bin_dir: "{{ paseo_home_dir }}/.local/bin"
+paseo_claude_installed_bin: "{{ paseo_claude_bin_dir }}/claude"
+paseo_claude_symlink: true                  # also symlink into /usr/local/bin/claude
+
+# --- credentials -------------------------------------------------------------------------------
+# Merged into the SAME daemon env file as paseo_opencode_secrets (one EnvironmentFile, one sourced
+# file — see tasks/service.yml), so the claude Paseo spawns inherits them. PULL FROM VAULT.
+# ANTHROPIC_API_KEY is the documented headless credential and is always used in non-interactive
+# runs. For a gateway instead, set ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN here — note Claude
+# Code speaks the Anthropic Messages API (POST /v1/messages), NOT an OpenAI-compatible endpoint.
+#   paseo_claude_secrets:
+#     ANTHROPIC_API_KEY: "{{ vault_anthropic_api_key }}"
+paseo_claude_secrets: {}
+
+# Preflight the credential from the TARGET and report the result — but never fail the play. A bad
+# key is otherwise invisible at provision time: Paseo decides a provider is "available" by finding
+# the binary, not by checking auth, so a host with a dead key still provisions green and reports
+# ready, then fails at the first prompt.
+#
+# Deliberately non-fatal. Fleet provisioning shouldn't stop because one credential is stale, and the
+# check itself can be wrong (no egress, a gateway that's down, a proxy in the way) — so a failure
+# here is a warning, not a verdict. Only a definitive HTTP 401 is reported as "rejected"; anything
+# else is reported as "could not verify" with the reason.
+paseo_verify_claude_credential: true
+# Model used for the 1-token probe. Only matters for the 200 case: a retired name returns 404, which
+# is already classified as "could not verify" rather than a bad key, so this drifting is harmless.
+paseo_claude_preflight_model: "claude-haiku-4-5-20251001"
+
+# --- settings.json -----------------------------------------------------------------------------
+# The role owns ~/.claude/settings.json outright: the installer does NOT create it, so there is no
+# merge conflict. Deployed 0600 because an `env` block here may carry a credential.
+paseo_claude_settings_dest: "{{ paseo_home_dir }}/.claude/settings.json"
+# Freeze the pinned version: DISABLE_AUTOUPDATER stops background update checks (manual `claude
+# update` still works; use DISABLE_UPDATES=1 to block that too). An `env` block in a settings file
+# outranks the same variable from the shell and is read BEFORE first-run setup.
+paseo_claude_settings:
+  env:
+    DISABLE_AUTOUPDATER: "1"
+# Deep-merged over the above, so you can add keys without restating them.
+paseo_claude_settings_extra: {}
+
+# --- Paseo provider registration ---------------------------------------------------------------
+# Pins the ABSOLUTE binary path at config.json -> agents.providers.claude.command. Verified against
+# the daemon's own schema: a `command` array takes the override branch of resolveProviderLaunch and
+# is checked with a literal existsSync, so it needs no PATH at all — belt-and-suspenders against a
+# PATH regression. `command` must be a non-empty array of strings; a bare string is rejected.
+# We set that ONE key and nothing else. `enabled: true` would be accepted but is redundant (the
+# provider is on by default), and the root + `daemon` levels of config.json are strict-schema, so
+# the less this role writes there, the less it can break on a daemon upgrade.
+paseo_register_claude_provider: true
+
+# First-run gate. A fresh dedicated-user HOME shows an onboarding wizard that blocks
+# non-interactive use, recorded as `hasCompletedOnboarding` in ~/.claude.json. That key is
+# UNDOCUMENTED internal state, not a supported config interface — we merge it in (never
+# overwrite the file: the installer also stores machineID and update state there) and accept it
+# may change between releases. The verify step below is what catches that. Set false if you'd
+# rather run `claude` once by hand per host.
+paseo_seed_claude_onboarding: true
 
 # =============================================================================
 # Daemon config.json export (grab it back to the controller)

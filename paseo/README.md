@@ -16,12 +16,15 @@ can run the same play across the whole fleet without two daemons ever sharing an
 2. Installs Node (≥20, version-gated) and the Paseo CLI into a per-user npm prefix.
 3. **Downloads + installs the OpenCode CLI** (official installer → `~/.opencode/bin`, version-pinnable)
    for that user, and **deploys your sanitized `opencode.json[c]`** into its config dir.
-4. **Injects your OpenCode provider secrets** (the `{env:VAR}` values) into the daemon's environment —
-   one file loaded by **both** systemd and OpenRC — so OpenCode resolves them when Paseo launches it.
-5. Seeds + deep-merges `config.json` (listen on the mesh IP, Host-header allowlist, worktrees root),
+4. *(opt-in)* **Installs Claude Code** (Anthropic's native installer, version-pinnable) for that user
+   and registers it as a Paseo agent provider. See "Claude Code as a second agent" below.
+5. **Injects your agent provider secrets** (OpenCode's `{env:VAR}` values, `ANTHROPIC_API_KEY`) into
+   the daemon's environment — one file loaded by **both** systemd and OpenRC — so they resolve when
+   Paseo launches the agent CLI.
+6. Seeds + deep-merges `config.json` (listen on the mesh IP, Host-header allowlist, worktrees root),
    preserving the password hash and any keys it doesn't manage.
-6. Sets the daemon password from Vault — idempotently, with rotation support.
-7. Drops a systemd unit **or** OpenRC script (auto-detected) and enables/starts it.
+7. Sets the daemon password from Vault — idempotently, with rotation support.
+8. Drops a systemd unit **or** OpenRC script (auto-detected) and enables/starts it.
 
 ## Quickstart
 
@@ -115,6 +118,11 @@ These were confirmed empirically against the real CLI, not guessed:
 | `paseo_opencode_config_src` | `opencode.json` | Sanitized config on the controller; the repo `site.yml` points it at `{{ playbook_dir }}/opencode.jsonc`. |
 | `paseo_opencode_secrets` | `{}` | `{env:VAR}` → value map (Vault); injected into the daemon environment. |
 | `paseo_opencode_auth` | `{}` | Optional `auth.json` dict (Vault) for providers using `opencode auth login`. |
+| `paseo_install_claude` | `false` | Install Claude Code (native installer) for `paseo_user` and register it with Paseo. |
+| `paseo_claude_version` | `stable` | `stable` / `latest` / an exact semver. **Pin an exact version for a fleet.** |
+| `paseo_claude_secrets` | `{}` | `ANTHROPIC_API_KEY` etc. (Vault); merged into the same daemon env file. |
+| `paseo_verify_claude_credential` | `true` | Preflight the key and *report* the result. Never fails the play. |
+| `paseo_claude_settings` | `{env: {DISABLE_AUTOUPDATER: "1"}}` | Role-owned `~/.claude/settings.json`. Extend via `paseo_claude_settings_extra`. |
 | `paseo_systemd_protect_home` | `true` | See own-user mode below. |
 | `paseo_home_dir` / `paseo_state_dir` | `/var/lib/paseo` / `…/.paseo` | Distinct `state_dir` per daemon for multiple-on-one-host. |
 
@@ -229,6 +237,91 @@ Standalone, on any box:
 ./opencode-effective-config.py --explain
 ./opencode-effective-config.py --cwd /path/to/project --raw   # include secrets
 ```
+
+## Claude Code as a second agent
+
+`claude` is a **first-class builtin provider** in Paseo, alongside `codex`/`copilot`/`opencode`. You
+don't have to teach Paseo about it — but the daemon only reports it *available* when it can actually
+find the binary, so the role installs it, puts it on the daemon's PATH, and pins its absolute path.
+
+Off by default (it pulls a ~260 MB binary per host). Turn it on with:
+
+```yaml
+paseo_install_claude: true
+paseo_claude_version: "2.1.212"        # pin exactly; `stable`/`latest` drift between hosts
+paseo_claude_secrets:                   # from Vault
+  ANTHROPIC_API_KEY: "{{ vault_anthropic_api_key }}"
+```
+
+Install is Anthropic's **native installer** (`claude.ai/install.sh`): a self-contained binary at
+`~/.local/share/claude/versions/<v>` with `~/.local/bin/claude` symlinked to it. No Node at runtime,
+`ripgrep` embedded. Needs `bash`, `curl`, `sha256sum`, ~512 MB free RAM, and outbound HTTPS.
+Anthropic also ships signed apt/dnf/apk repos, but **not** for Gentoo or Arch — the native installer
+is the only uniform path across all four families this role supports.
+
+Idempotency reads the launcher **symlink** (`readlink -e`), so a no-op play never pays the binary's
+cold start. On a host that already has `claude`, the role calls `claude install <version>` rather
+than re-running the bootstrap — the bootstrap always downloads `latest` first *and then* the pin, so
+it costs two full downloads.
+
+### How Paseo finds it
+
+Availability is decided by `which -a claude` run **inside the daemon process**, so the only thing
+that matters is the daemon's own PATH — `paseo_service_path`, baked into the unit. Setting a PATH in
+`agents.providers.claude.env` will *not* work: that env reaches the spawned child, never the lookup.
+The role covers this three ways: the bin dir goes on `paseo_service_path`, the binary is symlinked
+into `/usr/local/bin`, and `agents.providers.claude.command` pins the absolute path (verified
+against the daemon's schema — a `command` array skips PATH resolution entirely).
+
+Two behaviours worth expecting:
+
+- **Auth is not part of availability.** A host with `claude` installed but no valid key still shows
+  as *ready*, and only fails on the first prompt. Check it with `sudo -u paseo claude auth status`.
+- The availability probe treats a non-zero exit *or* a 2-second hang as success, so *available* means
+  "a binary answered", not "a working install".
+
+### First-run gate
+
+A fresh dedicated-user home shows an onboarding wizard that blocks non-interactive use. The role
+merges `hasCompletedOnboarding: true` into `~/.claude.json` (read-modify-write — that file also
+holds `machineID` and update state, so it is never templated). **That key is undocumented internal
+state**, not a supported interface: it's a compatibility bet that may break on a Claude Code
+upgrade. Set `paseo_seed_claude_onboarding: false` to run `claude` by hand once per host instead.
+
+### Credentials
+
+`paseo_claude_secrets` is merged with `paseo_opencode_secrets` into the **same** `/etc/paseo/paseo.env`
+— there is one `EnvironmentFile=`/one sourced file, and Ansible dicts don't merge across var files,
+so the union happens in `tasks/service.yml`. A Claude-only host still gets the env file.
+
+For a gateway instead of a direct key, set `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` in the same
+dict. Note Claude Code speaks the **Anthropic Messages API** (`POST /v1/messages`), so an
+OpenAI-compatible endpoint needs a translating proxy in front of it.
+
+### A bad credential never fails the play
+
+An invalid key can't break provisioning: it is only ever *written* to `/etc/paseo/paseo.env`, and no
+task authenticates with it. The risk is the opposite one — a dead key is invisible, because Paseo
+reports the provider available on the strength of finding the binary.
+
+So `paseo_verify_claude_credential` (default on) sends one `max_tokens: 1` request from the target
+and **reports** what came back, without ever failing:
+
+| Result | Meaning |
+|---|---|
+| `200` | Credential works. |
+| `401` | Loud warning: key rejected. Install is fine, prompts will fail. **Play continues.** |
+| `000` | Couldn't reach the endpoint at all. Says nothing about the key. |
+| other | `403` = authenticated but not permitted; `404` = retired probe model; `400` = probe body rejected. Not evidence of a bad key. |
+
+Only `401` is treated as a real verdict, so retiring `paseo_claude_preflight_model` upstream produces
+a `404` "could not verify" rather than a false alarm. Set `paseo_verify_claude_credential: false` to
+skip the request entirely (air-gapped fleets, or to avoid the round trip).
+
+The probe uses `curl --config -` rather than Ansible's `uri` module, for two reasons found by
+testing: `uri` aborts before sending anything if the target has a too-permissive `~/.netrc` (which
+would silently downgrade every check to "could not verify"), and reading the header from stdin keeps
+the credential out of `argv`, so it never appears in the process table on a shared host.
 
 ## Daemon config
 

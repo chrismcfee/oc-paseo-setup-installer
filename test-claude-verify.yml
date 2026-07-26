@@ -1,0 +1,96 @@
+---
+# Post-run assertions for test-claude.yml. Read-only: proves the things the install play cannot,
+# because they are properties of the RUNNING system rather than of the tasks.
+#
+#     ansible-playbook -i inventory.yml test-claude-verify.yml --limit <host>
+- name: Verify the Claude Code agent path on a live host
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Resolve the launcher symlink (the role's own idempotency probe)
+      ansible.builtin.command: "readlink -e {{ paseo_claude_installed_bin | default('/var/lib/paseo/.local/bin/claude') }}"
+      become_user: "{{ paseo_user | default('paseo') }}"
+      register: link
+      changed_when: false
+      failed_when: false
+
+    - name: Report the installed version
+      ansible.builtin.debug:
+        msg: "launcher -> {{ link.stdout | default('(unresolved)') }} | version={{ link.stdout | default('') | basename }}"
+
+    # The load-bearing one: PATH must have no empty element, since an empty element means CWD.
+    - name: Read the PATH actually baked into the unit
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        {% if ansible_service_mgr == 'systemd' %}
+        systemctl show paseo -p Environment --value
+        {% else %}
+        grep -E '^\s*(export\s+)?PASEO_PATH=' /etc/init.d/paseo /etc/conf.d/paseo 2>/dev/null | head -1
+        {% endif %}
+      args: {executable: /bin/bash}
+      register: unit_path
+      changed_when: false
+
+    - name: Assert the daemon PATH has no empty element and includes the Claude bin dir
+      ansible.builtin.assert:
+        that:
+          - "'::' not in unit_path.stdout"
+          - "'.local/bin' in unit_path.stdout"
+        fail_msg: "daemon PATH is wrong: {{ unit_path.stdout }}"
+        success_msg: "daemon PATH OK: {{ unit_path.stdout }}"
+
+    - name: Confirm the daemon itself can find claude (the real availability probe)
+      ansible.builtin.shell: "which -a claude"
+      environment:
+        PATH: "{{ paseo_service_path | default('/var/lib/paseo/.local/bin:/usr/local/bin:/usr/bin:/bin') }}"
+      become_user: "{{ paseo_user | default('paseo') }}"
+      register: which_claude
+      changed_when: false
+      failed_when: which_claude.rc != 0
+
+    - name: Verify config.json still parses and carries the provider + password hash
+      ansible.builtin.slurp:
+        src: "{{ paseo_state_dir | default('/var/lib/paseo/.paseo') }}/config.json"
+      register: cfg
+
+    - name: Assert the config merge did not clobber anything
+      ansible.builtin.assert:
+        that:
+          - (cfg.content | b64decode | from_json).agents.providers.claude.command | length > 0
+          - (cfg.content | b64decode | from_json).daemon.auth.password is defined
+          - (cfg.content | b64decode | from_json).daemon.listen is defined
+        fail_msg: "config.json lost a key during the provider merge"
+        success_msg: "config.json intact (provider registered, password hash preserved)"
+
+    - name: Confirm the daemon came up
+      ansible.builtin.command: "systemctl is-active paseo"
+      register: active
+      changed_when: false
+      failed_when: false
+      when: ansible_service_mgr == 'systemd'
+
+    - name: Report daemon state
+      ansible.builtin.debug:
+        msg: "paseo service: {{ active.stdout | default('n/a — not systemd') }}"
+
+    # Availability ignores auth, so this is the only step that proves the credential works.
+    - name: End-to-end auth check (only meaningful if a real key was deployed)
+      ansible.builtin.command:
+        argv:
+          - "{{ paseo_claude_installed_bin | default('/var/lib/paseo/.local/bin/claude') }}"
+          - "--print"
+          - "reply with exactly: ok"
+      environment:
+        HOME: "{{ paseo_home_dir | default('/var/lib/paseo') }}"
+      become_user: "{{ paseo_user | default('paseo') }}"
+      register: e2e
+      changed_when: false
+      failed_when: false
+      timeout: 120
+
+    - name: Report the auth result
+      ansible.builtin.debug:
+        msg: >-
+          rc={{ e2e.rc }} | {{ (e2e.stdout | default('') | trim)
+          if e2e.rc == 0 else 'FAILED: ' ~ (e2e.stderr | default('') | trim | truncate(300)) }}

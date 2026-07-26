@@ -1,0 +1,31 @@
+---
+# Live smoke test for the Claude Code agent path. Installs a REAL Paseo daemon plus Claude Code on
+# the target, as the dedicated paseo user. Run from the repo root:
+#
+#     ansible-playbook -i inventory.yml test-claude.yml --limit <host> --check   # dry run first
+#     ansible-playbook -i inventory.yml test-claude.yml --limit <host>
+#
+# Pass a real key to exercise auth end-to-end (otherwise the CLI installs and reports available,
+# but the first prompt fails — availability does not check credentials):
+#     -e '{"paseo_claude_secrets": {"ANTHROPIC_API_KEY": "sk-ant-..."}}'
+#
+# Undo with ./test-local-teardown.sh on the target, or remove the paseo user + /var/lib/paseo.
+- name: Paseo + Claude Code live smoke test
+  hosts: all
+  become: true
+  vars:
+    paseo_after_netbird: false          # don't order after a netbird unit that may not be here
+    paseo_relay_enabled: false
+    paseo_service_enabled: false        # start now, don't auto-start on boot
+    paseo_install_github_cli: false
+    paseo_daemon_password: "smoke-test-only-change-me"
+
+    # OpenCode off: this run is about the Claude path, and leaving it on would require a
+    # sanitized opencode.jsonc for the controller.
+    paseo_install_opencode: false
+    paseo_deploy_opencode_config: false
+
+    paseo_install_claude: true
+    paseo_claude_version: "2.1.212"     # pin, so a re-run is a genuine no-op test
+  roles:
+    - paseo
