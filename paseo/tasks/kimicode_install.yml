@@ -1,0 +1,136 @@
+---
+# Install Kimi Code CLI for paseo_user via Moonshot's official installer. The result is a
+# single-binary distribution (no Node.js required at runtime) placed at ~/.local/bin/kimi,
+# with ~/.kimi-code/ holding config, sessions, and logs.
+#
+# The official script downloads the latest release, verifies the checksum, and adds kimi
+# to PATH. There is no explicit version pinning mechanism — the script always fetches the
+# latest release. For fleet stability, pinning should happen at the Paseo config level
+# (agents.providers.kimi.command pins the absolute binary path).
+#
+# ACP mode: launch kimi in headless ACP mode (`kimi acp`) for JSON-RPC over stdio.
+# This is the mode Paseo uses to drive the agent — no banner, no interactive prompts,
+# just stdin/stdout ACP protocol.
+#
+# Idempotency reads the SYMLINK, not the binary: `readlink -e` resolves it and fails on a
+# dangling target, giving us the installed version without paying the binary's cold start.
+# The alternative (`kimi --version`) execs the binary for the same answer.
+
+- name: Ensure curl + ca-certificates are present (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - bash
+      - curl
+      - ca-certificates
+      - coreutils
+    state: present
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+
+- name: Ensure curl is present (Gentoo)
+  community.general.portage:
+    package: net-misc/curl
+    state: present
+  when: ansible_os_family == 'Gentoo'
+
+- name: Ensure curl + coreutils are present (Fedora/RHEL)
+  ansible.builtin.package:
+    name:
+      - bash
+      - curl
+      - coreutils
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Ensure curl + coreutils are present (Arch)
+  community.general.pacman:
+    name:
+      - bash
+      - curl
+      - coreutils
+    state: present
+  when: ansible_os_family == 'Archlinux'
+
+# The installer writes into ~/.local/bin and ~/.kimi-code; create the parent dirs now so a
+# fresh dedicated user (whose home may only have been made by useradd) has the right ownership.
+- name: Ensure the Kimi Code install parent dirs exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0755"
+  loop:
+    - "{{ paseo_kimicode_bin_dir }}"
+    - "{{ paseo_kimicode_data_dir }}"
+
+# `readlink -e` resolves the launcher AND requires the target to exist, so a dangling symlink left
+# by a half-finished install reports rc != 0 rather than a false-positive version.
+- name: Read the installed Kimi Code version from the launcher symlink
+  ansible.builtin.command: "readlink -e {{ paseo_kimicode_installed_bin }}"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_kc_link
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether Kimi Code must be (re)installed
+  ansible.builtin.set_fact:
+    _paseo_kc_installed: "{{ _paseo_kc_link.rc == 0 }}"
+
+- name: Decide the install action
+  ansible.builtin.set_fact:
+    _paseo_kc_install_needed: >-
+      {{ (not _paseo_kc_installed) or (paseo_kimicode_upgrade | bool) }}
+
+# The official install script is a self-contained single-binary delivery. It downloads the
+# latest release, verifies the checksum, and installs into ~/.local/bin/kimi. No Node.js
+# required — everything is bundled. `set -o pipefail` so a curl failure fails the task.
+- name: Bootstrap Kimi Code (official installer)
+  ansible.builtin.shell:
+    cmd: "set -o pipefail; curl -fsSL {{ paseo_kimicode_install_url }} | bash"
+  args:
+    executable: /bin/bash
+  environment:
+    HOME: "{{ paseo_home_dir }}"
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_kc_bootstrap
+  changed_when: _paseo_kc_bootstrap.rc == 0
+  when:
+    - _paseo_kc_install_needed | bool
+    - not _paseo_kc_installed
+  notify: restart paseo
+
+- name: Verify the Kimi Code launcher resolves
+  ansible.builtin.stat:
+    path: "{{ paseo_kimicode_installed_bin }}"
+    follow: true
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_kc_bin_stat
+
+# Skipped under --check: the install tasks above are no-ops in check mode, so on a host that
+# doesn't have Kimi Code yet this would fail the dry run rather than report the intended change.
+- name: Assert Kimi Code installed
+  ansible.builtin.assert:
+    that:
+      - _paseo_kc_bin_stat.stat.exists
+      - _paseo_kc_bin_stat.stat.executable | default(false)
+    fail_msg: >-
+      Kimi Code binary not resolvable via {{ paseo_kimicode_installed_bin }} after install. The
+      official installer needs bash, curl, ~256 MB free RAM and outbound HTTPS to code.kimi.com;
+      it also exits 137 when OOM-killed. Re-run with -e paseo_no_log=false for the output.
+    quiet: true
+  when: not ansible_check_mode
+
+# Belt-and-suspenders alongside paseo_service_path, matching what claude_install.yml does. A
+# distinct dest from the Claude symlink — never share one.
+- name: Symlink the Kimi Code launcher into /usr/local/bin
+  ansible.builtin.file:
+    src: "{{ paseo_kimicode_installed_bin }}"
+    dest: /usr/local/bin/kimi
+    state: link
+    force: true
+  when: paseo_kimicode_symlink | bool

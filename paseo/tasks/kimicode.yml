@@ -1,0 +1,162 @@
+---
+# Configure Kimi Code for the daemon user and register it with Paseo.
+#
+# Three independent pieces:
+#  1. ~/.kimi-code/config.json — role-deployed settings (env vars, MCP config). Kimi Code
+#     reads its config from ~/.kimi-code/ by default, overridable via KIMI_CODE_HOME.
+#  2. Paseo provider registration — pin the absolute binary path with the `acp` subcommand
+#     so Paseo launches `kimi acp` (ACP JSON-RPC over stdio) rather than interactive mode.
+#  3. Credential preflight — Kimi Code uses MOONSHOT_API_KEY from the environment.
+#     Paseo's availability probe only checks the binary, so a dead key provisions green
+#     and fails at the first prompt. This closes that gap.
+#
+# Kimi Code speaks ACP natively via `kimi acp` — a stdio JSON-RPC transport that Paseo's
+# built-in ACP bridge can drive. No separate adapter needed.
+
+- name: Ensure the Kimi Code config dir exists
+  ansible.builtin.file:
+    path: "{{ paseo_kimicode_config_dest | dirname }}"
+    state: directory
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0700"
+  when: paseo_deploy_kimicode_settings | bool
+
+# 0600 and no_log: settings may carry API key references. Deploy only if the user has
+# provided custom settings — Kimi Code generates its own defaults on first run.
+- name: Deploy Kimi Code settings.json
+  ansible.builtin.copy:
+    content: "{{ paseo_kimicode_settings | combine(paseo_kimicode_settings_extra, recursive=True) | to_nice_json }}\n"
+    dest: "{{ paseo_kimicode_config_dest }}"
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0600"
+  no_log: "{{ paseo_no_log }}"
+  when:
+    - paseo_deploy_kimicode_settings | bool
+    - paseo_kimicode_settings | length > 0
+  notify: restart paseo
+
+# --- Paseo provider registration ----------------------------------------------------------------
+# `agents.providers.kimi.command` is an array: ["kimi", "acp"]. This passes through Paseo's
+# ProviderOverrideSchema as a command array — the override branch of resolveProviderLaunch
+# checks this literally rather than searching PATH. The `acp` subcommand switches Kimi Code
+# into ACP mode (JSON-RPC over stdin/stdout), which is how Paseo drives it headlessly.
+#
+# `enabled: true` would be accepted but is redundant (the provider is on by default once
+# registered). The root + `daemon` levels of config.json are strict-schema, so we set only
+# the command key — nothing else.
+- name: Read existing daemon config (for the provider merge)
+  ansible.builtin.slurp:
+    src: "{{ paseo_state_dir }}/config.json"
+  register: _paseo_kc_cfg_raw
+  failed_when: false
+  when: paseo_register_kimicode_provider | bool
+
+- name: Register Kimi Code with Paseo (agents.providers.kimi)
+  ansible.builtin.copy:
+    content: >-
+      {{ ((_paseo_kc_cfg_raw.content | b64decode | from_json)
+            if (_paseo_kc_cfg_raw.content is defined
+                and (_paseo_kc_cfg_raw.content | length) > 0)
+            else {})
+         | combine({'agents': {'providers': {'kimi':
+             {'command': ['kimi', 'acp']}}}}, recursive=True)
+         | to_nice_json }}
+    dest: "{{ paseo_state_dir }}/config.json"
+    owner: "{{ paseo_user }}"
+    group: "{{ paseo_group }}"
+    mode: "0600"
+  when: paseo_register_kimicode_provider | bool
+  notify: restart paseo
+
+# --- credential preflight (reports, never fails) -------------------------------------------------
+# Paseo's availability probe only looks for the binary, so a dead key provisions green and fails at
+# the first prompt. This closes that gap without making provisioning brittle.
+#
+# Kimi Code authenticates via MOONSHOT_API_KEY in the environment. The API endpoint is
+# Moonshot's API (api.moonshot.cn or api.moonshot.ai depending on region).
+# `kimi --version` returns a clean JSON line with agent information when authenticated.
+- name: Select the credential to preflight
+  ansible.builtin.set_fact:
+    _paseo_kc_base: "{{ paseo_kimicode_secrets.get('MOONSHOT_BASE_URL', 'https://api.moonshot.cn') | regex_replace('/+$', '') }}"
+    _paseo_kc_apikey: "{{ paseo_kimicode_secrets.get('MOONSHOT_API_KEY', '') }}"
+  no_log: "{{ paseo_no_log }}"
+  when: paseo_verify_kimicode_credential | bool
+
+# curl, not ansible.builtin.uri, for the same reasons as the Claude credential preflight:
+#  - uri aborts with status -1 if the target has a too-permissive ~/.netrc;
+#  - curl is already a hard dependency;
+#  - `--config -` reads the header from STDIN, keeping the credential out of argv.
+#
+# check_mode: false — read-only probe, and a dry run is exactly when catching a stale key is most
+# useful. max_tokens 1 keeps the cost negligible.
+- name: Preflight the Kimi Code credential (non-fatal)
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --max-time
+      - "20"
+      - --config
+      - "-"
+    stdin: |
+      url = "{{ _paseo_kc_base }}/v1/models"
+      request = "GET"
+      header = "authorization: *** {{ _paseo_kc_apikey }}"
+  become: true
+  become_user: "{{ paseo_user }}"
+  register: _paseo_kc_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: "{{ paseo_no_log }}"
+  when:
+    - paseo_verify_kimicode_credential | bool
+    - _paseo_kc_apikey | length > 0
+
+# curl writes the HTTP status to stdout; 000 means it never got a response (DNS, refused, timeout).
+- name: Interpret the preflight status
+  ansible.builtin.set_fact:
+    _paseo_kc_status: "{{ (_paseo_kc_probe.stdout | default('') | trim) if not (_paseo_kc_probe is skipped) else '' }}"
+  when: paseo_verify_kimicode_credential | bool
+
+# 401 is the only definitive "this credential is bad" signal. 403 means authenticated but not
+# permitted; 404 means endpoint doesn't exist; 400 means our probe was rejected.
+# Treating those as failures would produce false alarms.
+- name: Report the credential preflight result
+  ansible.builtin.debug:
+    msg: >-
+      {% if _paseo_kc_status == '200' %}
+      Kimi Code credential OK (HTTP 200 from {{ _paseo_kc_base }}).
+      {% elif _paseo_kc_status == '401' %}
+      *** Kimi Code credential REJECTED (HTTP 401) by {{ _paseo_kc_base }}. Kimi Code is installed
+      and Paseo will report it available — availability does not check auth — but every prompt will
+      fail until MOONSHOT_API_KEY in paseo_kimicode_secrets is fixed. Continuing anyway.
+      {% elif _paseo_kc_status == '000' %}
+      Could not reach {{ _paseo_kc_base }} from this host (no response: DNS, refused, or timeout).
+      The credential itself was never tested — this says nothing about whether the key is valid.
+      {% else %}
+      Could not verify the Kimi Code credential (HTTP {{ _paseo_kc_status | default('?') }}).
+      This is NOT evidence the key is bad — 403 means authenticated but not permitted, 404 means the
+      endpoint was not found, 400 means the probe was rejected. Check by hand with:
+      sudo -u {{ paseo_user }} {{ paseo_kimicode_installed_bin }} --version
+      {% endif %}
+  when:
+    - paseo_verify_kimicode_credential | bool
+    - not (_paseo_kc_probe is skipped)
+
+- name: Note when no credential was supplied at all
+  ansible.builtin.debug:
+    msg: >-
+      No MOONSHOT_API_KEY in paseo_kimicode_secrets, so nothing to preflight.
+      Kimi Code is installed and will report available, but prompts will fail until a credential
+      reaches {{ paseo_env_file }}.
+  when:
+    - paseo_verify_kimicode_credential | bool
+    - _paseo_kc_probe is skipped

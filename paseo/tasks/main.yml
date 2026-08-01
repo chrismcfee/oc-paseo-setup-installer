@@ -28,6 +28,10 @@
   ansible.builtin.import_tasks: claude_install.yml
   when: paseo_install_claude | bool
 
+- name: Install the Kimi Code CLI
+  ansible.builtin.import_tasks: kimicode_install.yml
+  when: paseo_install_kimicode | bool
+
 - name: Manage the daemon password
   ansible.builtin.import_tasks: password.yml
   when: paseo_set_password | bool
@@ -53,6 +57,15 @@
     - (paseo_deploy_claude_settings | bool)
       or (paseo_seed_claude_onboarding | bool)
       or (paseo_register_claude_provider | bool)
+
+# Must run AFTER config.yml: it deep-merges agents.providers.kimi into the same config.json that
+# config.yml writes, and the config.yml write would otherwise drop the registration.
+- name: Configure Kimi Code and register it with Paseo
+  ansible.builtin.import_tasks: kimicode.yml
+  when:
+    - paseo_install_kimicode | bool
+    - (paseo_deploy_kimicode_settings | bool)
+      or (paseo_register_kimicode_provider | bool)
 
 - name: Grab the daemon config back to the controller
   ansible.builtin.import_tasks: fetch_daemon_config.yml

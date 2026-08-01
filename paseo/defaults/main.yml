@@ -52,6 +52,7 @@ paseo_opencode_bin: ""           # e.g. /usr/bin/opencode — empty = skip the s
 paseo_agent_path_dirs:
   - "{{ (paseo_opencode_install_dir ~ '/bin') if paseo_install_opencode | bool else '' }}"
   - "{{ paseo_claude_bin_dir if paseo_install_claude | bool else '' }}"
+  - "{{ paseo_kimicode_bin_dir if paseo_install_kimicode | bool else '' }}"
   - "{{ paseo_bin_dir }}"
 paseo_service_path: "{{ (paseo_agent_path_dirs | reject('eq', '') | join(':')) ~ ':/usr/local/bin:/usr/bin:/bin' }}"
 
@@ -270,6 +271,73 @@ paseo_register_claude_provider: true
 # may change between releases. The verify step below is what catches that. Set false if you'd
 # rather run `claude` once by hand per host.
 paseo_seed_claude_onboarding: true
+
+# =============================================================================
+# Kimi Code: install + register as a Paseo agent provider — dedicated-user mode
+# =============================================================================
+# `kimi` is registered as a custom provider in Paseo (not a builtin like claude/opencode),
+# driven through the ACP bridge (`kimi acp` — JSON-RPC over stdio). Kimi Code speaks ACP
+# natively with 10/12 agent methods implemented: initialize, authenticate, session/new,
+# session/prompt, session/cancel, session/list, and more. No separate bridge needed —
+# Paseo connects directly to the `kimi acp` subprocess.
+#
+# Off by default: enabling it downloads a ~150 MB binary per host. The official installer
+# is a single-binary distribution with no Node.js requirement.
+paseo_install_kimicode: false
+paseo_deploy_kimicode_settings: true          # deploy ~/.kimi-code/config.json (needs install)
+
+# --- install (Moonshot's official installer: curl | bash) ---------------------------------------
+# Self-contained single-binary distribution (no Node.js at runtime). Needs bash + curl on the
+# target, outbound HTTPS to code.kimi.com, and ~256 MB free RAM to install.
+# The script always fetches the latest release — there is no explicit version pinning via the
+# installer. For fleet stability, pin the binary path in config.json at the provider level.
+paseo_kimicode_install_url: "https://code.kimi.com/kimi-code/install.sh"
+paseo_kimicode_upgrade: false                 # re-run the installer every play even if present
+# Kimi Code installs into ~/.local/bin/kimi with data at ~/.kimi-code/ (overridable via
+# KIMI_CODE_HOME env var).
+paseo_kimicode_data_dir: "{{ paseo_home_dir }}/.kimi-code"
+paseo_kimicode_bin_dir: "{{ paseo_home_dir }}/.local/bin"
+paseo_kimicode_installed_bin: "{{ paseo_kimicode_bin_dir }}/kimi"
+paseo_kimicode_symlink: true                  # also symlink into /usr/local/bin/kimi
+
+# --- credentials --------------------------------------------------------------------------------
+# Merged into the SAME daemon env file as paseo_opencode_secrets + paseo_claude_secrets (one
+# EnvironmentFile — see tasks/service.yml), so the kimi Paseo spawns inherits them. PULL FROM
+# VAULT. MOONSHOT_API_KEY is the documented headless credential. For a gateway instead, set
+# MOONSHOT_BASE_URL + MOONSHOT_AUTH_TOKEN here.
+#   paseo_kimicode_secrets:
+#     MOONSHOT_API_KEY: "{{ vault_moonshot_api_key }}"
+paseo_kimicode_secrets: {}
+
+# Preflight the credential from the TARGET and report the result — but never fail the play. A bad
+# key is otherwise invisible at provision time: Paseo decides a provider is "available" by finding
+# the binary, not by checking auth, so a host with a dead key still provisions green and reports
+# ready, then fails at the first prompt.
+#
+# Deliberately non-fatal. Fleet provisioning shouldn't stop because one credential is stale.
+# Only a definitive HTTP 401 is reported as "rejected"; anything else is "could not verify."
+paseo_verify_kimicode_credential: true
+
+# --- config ------------------------------------------------------------------------------------
+# Kimi Code reads its config from ~/.kimi-code/config.json by default. The role deploys a
+# minimal settings file (env vars, regional preferences). Kimi Code generates its own defaults
+# on first run, so this is additive — only deploy if you need to override defaults.
+paseo_kimicode_config_dest: "{{ paseo_kimicode_data_dir }}/config.json"
+# Minimal default settings. An `env` block here can carry credentials, so the file is 0600.
+# Extend via paseo_kimicode_settings_extra.
+paseo_kimicode_settings: {}
+# Deep-merged over the above, so you can add keys without restating them.
+paseo_kimicode_settings_extra: {}
+
+# --- Paseo provider registration ---------------------------------------------------------------
+# Pins the ABSOLUTE binary path with the `acp` subcommand at config.json →
+# agents.providers.kimi.command. Verified against the daemon's own schema: a `command` array
+# takes the override branch of resolveProviderLaunch and is checked with a literal existsSync.
+# `command: ["kimi", "acp"]` launches Kimi Code in ACP mode (JSON-RPC over stdio).
+#
+# NOTE: `kimi` is NOT a builtin Paseo provider. It must be registered as a custom provider
+# with `agents.providers.kimi`. This adds it to the provider list alongside Claude/OpenCode/Codex.
+paseo_register_kimicode_provider: true
 
 # =============================================================================
 # Daemon config.json export (grab it back to the controller)
